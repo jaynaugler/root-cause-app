@@ -4,7 +4,8 @@
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
 
-	let { data } = $props();
+	// Extract the 'form' prop to access action return data and failures
+	let { data, form } = $props();
 </script>
 
 <main class="container mx-auto max-w-xl py-12 px-4 space-y-6">
@@ -14,9 +15,23 @@
 			<Card.Description>SvelteKit 5 + MongoDB + shadcn-svelte</Card.Description>
 		</Card.Header>
 		<Card.Content class="space-y-4">
-			<form method="POST" action="?/create" use:enhance class="flex gap-2">
-				<Input name="name" placeholder="Add a test document..." required />
-				<Button type="submit">Save</Button>
+			<form method="POST" action="?/create" use:enhance class="space-y-2">
+				<div class="flex gap-2">
+					<!-- Repopulate the value if validation failed, otherwise empty -->
+					<Input 
+						name="name" 
+						placeholder="Add a test document..." 
+						value={form?.name ?? ''} 
+					/>
+					<Button type="submit">Save</Button>
+				</div>
+				
+				<!-- Render Zod validation errors if they exist for this field -->
+				{#if form?.errors?.name}
+					<p class="text-sm font-medium text-red-500">
+						{form.errors.name[0]}
+					</p>
+				{/if}
 			</form>
 
 			<div class="space-y-2 pt-4">
