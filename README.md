@@ -1,56 +1,69 @@
-# sv
+# root-cause-app
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+A SvelteKit 5 + MongoDB starter built for a hackathon: shadcn-svelte UI, Tailwind CSS v4, zod-validated form actions, and a Dockerized local MongoDB.
 
-## Creating a project
+## Requirements
 
-If you're seeing this, you've probably already done this step. Congrats!
+- Node.js (>= 22) and [pnpm](https://pnpm.io)
+- Docker (for the local MongoDB container)
 
-```sh
-# create a new project
-npx sv create my-app
-```
+## Setup
 
-To recreate this project with the same configuration:
+1. Install dependencies:
 
-```sh
-# recreate this project
-pnpm dlx sv@1.2.0 create --template minimal --types ts --add tailwindcss="plugins:typography" --install pnpm root-cause-app
-```
+   ```sh
+   pnpm install
+   ```
 
-## Adding features
+2. Start MongoDB in Docker (data persists across container recreation via the named volume):
 
-Add features to your project with `sv add`:
+   ```sh
+   docker run -d --name mongodb --restart always -p 27017:27017 \
+     -v mongodb-data:/data/db mongo:8.0.4
+   ```
 
-```sh
-npx sv add
-```
+3. Configure the database connection:
 
-For example, to add Tailwind CSS:
+   ```sh
+   cp .env.example .env
+   ```
 
-```sh
-npx sv add tailwindcss
-```
+   Then fill in either a local URI (`MONGODB_URI="mongodb://localhost:27017/"`) or a MongoDB Atlas connection string (`ATLAS_URI`). Atlas takes precedence when both are set. No `docker run` needed if you use an Atlas URI.
 
-## Developing
+4. (Optional) Seed the `items` collection with demo data:
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+   ```sh
+   pnpm seed
+   ```
 
-```sh
-npm run dev
+   ⚠️ This clears the collection first.
 
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
+5. Start the dev server:
 
-## Building
+   ```sh
+   pnpm dev
+   ```
 
-To create a production version of your app:
+## Commands
 
-```sh
-npm run build
-```
+| Command             | What it does                                                     |
+| ------------------- | ---------------------------------------------------------------- |
+| `pnpm dev`          | Start the dev server                                             |
+| `pnpm build`        | Production build                                                 |
+| `pnpm preview`      | Preview the production build locally                             |
+| `pnpm check`        | Type-check the project with `svelte-check` (no test suite yet)   |
+| `pnpm seed`         | Clear and re-seed the `items` collection                         |
 
-You can preview the production build with `npm run preview`.
+## Project structure
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+- `src/routes/` — SvelteKit pages: `+page.server.ts` (load + form actions with zod validation), `+page.svelte` (UI)
+- `src/lib/server/db.ts` — MongoDB client singleton (Atlas-first fallback to local)
+- `src/env.ts` — Kit 3 environment variable declarations; read via `$app/env/private`
+- `src/lib/components/ui/` — shadcn-svelte components
+- `src/scripts/seed.ts` — standalone seeding script (`tsx` + `dotenv`, independent of SvelteKit)
+
+## Notes
+
+- Imports use the `#lib` alias (not `$lib`):
+  `import { getDb } from '#lib/server/db.js';`
+- To deploy, replace `@sveltejs/adapter-auto` in `vite.config.ts` with the adapter for your target platform (Node, Vercel, etc.).
