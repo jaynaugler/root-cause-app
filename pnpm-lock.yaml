@@ -6,7 +6,9 @@ settings:
 
 importers:
 
-  .:
+  .: {}
+
+  web:
     dependencies:
       mongodb:
         specifier: ^7.8.0

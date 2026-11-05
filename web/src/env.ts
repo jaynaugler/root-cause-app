@@ -4,6 +4,7 @@ import { defineEnvVars } from '@sveltejs/kit/env';
 
 export const variables = defineEnvVars({
 	ATLAS_URI: {
+		schema: (value) => value?.trim() || undefined,
 		description: 'MongoDB Atlas connection string. Takes precedence over MONGODB_URI.'
 	},
 	ATLAS_DB: {

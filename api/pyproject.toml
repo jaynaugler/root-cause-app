@@ -1,0 +1,18 @@
+[project]
+name = "root-cause-api"
+version = "0.1.0"
+description = "FastAPI + MongoDB service for root-cause"
+requires-python = ">=3.12"
+dependencies = [
+	"fastapi>=0.115",
+	"uvicorn[standard]>=0.30",
+	"motor>=3.6",
+	"dnspython>=2.6",
+	"pydantic-settings>=2.6",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.8", "httpx>=0.28"]
+
+[tool.ruff]
+line-length = 100

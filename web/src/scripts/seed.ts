@@ -1,4 +1,6 @@
-import 'dotenv/config'; // Instantly loads your project root .env
+import dotenv from 'dotenv';
+// Load the shared workspace-root .env (../../ from web/src/scripts) regardless of cwd
+dotenv.config({ path: new URL('../../../.env', import.meta.url) });
 import { MongoClient } from 'mongodb';
 
 async function main() {

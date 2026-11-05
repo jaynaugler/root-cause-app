@@ -1,0 +1,15 @@
+{
+	"name": "root-cause",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"scripts": {
+		"dev": "pnpm -C web dev",
+		"dev:api": "cd api && uv run uvicorn app.main:app --reload",
+		"build": "pnpm -C web build",
+		"preview": "pnpm -C web preview",
+		"check": "pnpm -C web check",
+		"seed": "pnpm -C web seed",
+		"api:sync": "uv sync --project api"
+	}
+}

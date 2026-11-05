@@ -1,12 +1,12 @@
 node_modules
 
-# Output
+# Output (app lives in web/)
 .output
 .vercel
 .netlify
 .wrangler
-/.svelte-kit
-/build
+web/.svelte-kit
+web/build
 
 # IDE Specific
 .vscode/
@@ -24,3 +24,13 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+web/vite.config.js.timestamp-*
+web/vite.config.ts.timestamp-*
+
+# Python / uv (api/uv.lock is committed — do not ignore it)
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

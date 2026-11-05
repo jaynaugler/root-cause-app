@@ -4,9 +4,20 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+	server: {
+		proxy: {
+			// Proxy /api/* to the FastAPI service (same origin in dev)
+			'/api': {
+				target: 'http://127.0.0.1:8000',
+				changeOrigin: true
+			}
+		}
+	},
 	plugins: [
 		tailwindcss(),
 		sveltekit({
+			// Load the shared workspace-root .env (single source for web + api)
+			env: { dir: '..' },
 			compilerOptions: {
 				// Force runes mode for the project, except for libraries. Can be removed in svelte 6.
 				runes: ({ filename }) =>
