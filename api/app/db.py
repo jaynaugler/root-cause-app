@@ -11,5 +11,7 @@ from app.config import resolve_db_config
 
 uri, db_name, target = resolve_db_config()
 
-client = AsyncIOMotorClient(uri)
+# tz_aware=True so datetimes read back from Mongo carry the UTC offset — without
+# it POST returns "...+00:00" while GET returns naive strings for the same field.
+client = AsyncIOMotorClient(uri, tz_aware=True)
 db = client[db_name]

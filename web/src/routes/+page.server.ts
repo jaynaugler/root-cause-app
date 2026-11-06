@@ -1,10 +1,11 @@
 import { getDb } from '#lib/server/db.js';
 import { fail } from '@sveltejs/kit';
+import { ObjectId } from 'mongodb';
 import { z } from 'zod';
 import type { Actions, PageServerLoad } from './$types';
 
 export interface Item {
-	_id?: string;
+	_id: ObjectId;
 	name: string;
 	createdAt: Date;
 }
@@ -12,6 +13,7 @@ export interface Item {
 // 1. Define the validation schema
 const itemSchema = z.object({
 	name: z.string()
+		.trim()
 		.min(3, { message: 'Name must be at least 3 characters.' })
 		.max(50, { message: 'Name cannot exceed 50 characters.' })
 });
@@ -27,7 +29,7 @@ export const load: PageServerLoad = async () => {
 
 	const items = rawItems.map((doc) => ({
 		...doc,
-		_id: doc._id.toString()
+		_id: String(doc._id)
 	}));
 
 	return { items };

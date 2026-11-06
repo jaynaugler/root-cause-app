@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_allowed_origins
-from app.db import client, db_name, target
+from app.db import client, db
 from app.items import router as items_router
 
 
@@ -33,4 +33,8 @@ app.include_router(items_router, prefix="/api")
 
 @app.get("/health")
 async def health():
-	return {"status": "ok", "db": {"target": target, "name": db_name}}
+	try:
+		await db.command("ping")
+	except Exception:
+		return {"status": "error", "db": "unreachable"}
+	return {"status": "ok"}

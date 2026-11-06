@@ -34,7 +34,15 @@ const proxy: RequestHandler = async ({ request, url }) => {
 
 	// The FastAPI router serves under the /api prefix itself, so the path is
 	// forwarded as-is: https://<render-app>.onrender.com/api/items
-	const target = new URL(url.pathname + url.search, PUBLIC_API_BASE_URL);
+	let target: URL;
+	try {
+		target = new URL(url.pathname + url.search, PUBLIC_API_BASE_URL);
+	} catch {
+		return new Response(
+			`PUBLIC_API_BASE_URL is not a valid URL: ${JSON.stringify(PUBLIC_API_BASE_URL)}`,
+			{ status: 500 }
+		);
+	}
 
 	const headers = new Headers();
 	for (const [name, value] of request.headers) {
@@ -45,12 +53,20 @@ const proxy: RequestHandler = async ({ request, url }) => {
 
 	const body = ['GET', 'HEAD'].includes(request.method) ? undefined : request.body;
 
-	const upstream = await fetch(target, {
-		method: request.method,
-		headers,
-		body,
-		duplex: 'half'
-	} as RequestInit);
+	let upstream: Response;
+	try {
+		upstream = await fetch(target, {
+			method: request.method,
+			headers,
+			body,
+			duplex: 'half'
+		} as RequestInit);
+	} catch (err) {
+		// Upstream unreachable (e.g. Render free-tier cold start failing, DNS) —
+		// report a 502 with context instead of SvelteKit's generic 500.
+		console.error('API proxy fetch failed:', err);
+		return new Response('API proxy failed to reach the upstream service', { status: 502 });
+	}
 
 	// Pass status, body, and headers through — the browser sees the API's response as-is.
 	const responseHeaders = new Headers();
