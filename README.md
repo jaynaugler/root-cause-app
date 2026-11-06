@@ -73,6 +73,31 @@ A hackathon monorepo: SvelteKit 5 web app (`web/`) plus a FastAPI + MongoDB serv
 - `api/app/items.py` — `GET|POST /api/items` starter resource over the shared `items` collection
 - `api/app/config.py` / `api/app/db.py` — settings (root `.env`, cwd-independent) and motor client singleton
 
+## Deployment
+
+The web app hosts on **Vercel**, the API on **Render**, both pointing at **MongoDB Atlas**. The browser reaches the API same-origin via `/api/*` — Vite's dev proxy locally, and the SvelteKit catch-all handler `web/src/routes/api/[...path]/+server.ts` in production (it forwards to `PUBLIC_API_BASE_URL`).
+
+### Render (API)
+
+| Setting            | Value                                                          |
+| ------------------ | -------------------------------------------------------------- |
+| Root Directory     | `api`                                                          |
+| Build command      | `pip install uv && uv sync --active --frozen --no-dev`         |
+| Start command      | `uvicorn app.main:app --host 0.0.0.0 --port $PORT`             |
+| Health Check Path  | `/health`                                                      |
+| Environment        | `ATLAS_URI`, `ATLAS_DB` (optionally `ALLOWED_ORIGINS` — comma-separated origins allowed to bypass the proxy) |
+
+`--active` makes uv install into **Render's** managed venv (without it, uv ignores `VIRTUAL_ENV` and `uvicorn` is not on `PATH`). Note the free tier sleeps after ~15 min idle — first request cold-starts in ~30–60s.
+
+### Vercel (web app)
+
+| Setting            | Value                                                          |
+| ------------------ | -------------------------------------------------------------- |
+| Project Root Directory | `web`                                                      |
+| Environment        | `ATLAS_URI`, `ATLAS_DB`, `PUBLIC_API_BASE_URL=https://<render-app>.onrender.com` |
+
+Set the env vars **before the first build** — public env values are inlined at build time. Both services read *only* Atlas vars; never set the local `MONGODB_URI` on the platforms. Locally, `ATLAS_URI` takes precedence in the root `.env`, so `pnpm seed` populates Atlas when set.
+
 ## Notes
 
 - Imports use the `#lib` alias (not `$lib`):

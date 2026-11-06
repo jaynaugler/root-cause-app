@@ -18,5 +18,11 @@ export const variables = defineEnvVars({
 	MONGODB_DB: {
 		schema: (value) => value?.trim() || undefined,
 		description: 'Local database name (optional; defaults to root-cause_db).'
+	},
+	PUBLIC_API_BASE_URL: {
+		schema: (value) => value?.trim() || '',
+		description:
+			'Python API base URL used by the prod /api/* proxy fallback (empty in dev — the Vite proxy handles it).',
+		public: true
 	}
 });

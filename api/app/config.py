@@ -25,6 +25,12 @@ class Settings(BaseSettings):
 	atlas_db: str = ""
 	mongodb_uri: str = ""
 	mongodb_db: str = ""
+	allowed_origins: str = ""  # comma-separated origins allowed to call the API directly (browser CORS)
+
+
+def get_allowed_origins() -> list[str]:
+	"""Parse ALLOWED_ORIGINS into a list; empty means 'same-origin / proxy only'."""
+	return [o.strip() for o in settings.allowed_origins.split(",") if o.strip()]
 
 
 settings = Settings()

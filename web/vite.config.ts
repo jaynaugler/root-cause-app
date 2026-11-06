@@ -6,7 +6,8 @@ import { defineConfig } from 'vite';
 export default defineConfig({
 	server: {
 		proxy: {
-			// Proxy /api/* to the FastAPI service (same origin in dev)
+			// Proxy /api/* to the FastAPI service (same origin in dev). In production
+			// the catch-all handler in src/routes/api/[...path]/+server.ts takes over.
 			'/api': {
 				target: 'http://127.0.0.1:8000',
 				changeOrigin: true
