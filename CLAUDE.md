@@ -11,10 +11,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands (run from the repo root)
 
 - `pnpm dev` — web dev server on 5173 (forwards to `pnpm -C web dev`)
-- `pnpm dev:api` — FastAPI on 8000 (`cd api && uv run uvicorn app.main:app --reload`); endpoints: `/health`, `/api/docs`, `GET/POST /api/items`
+- `pnpm dev:api` — FastAPI on 8000 (`cd api && uv run uvicorn app.main:app --reload`); endpoints: `/health`, `/docs` (Swagger — not under `/api`, so not reachable through the dev proxy), `GET/POST /api/items`
 - `pnpm api:sync` — install/sync Python deps into `api/.venv`
 - `pnpm build` / `pnpm preview` — production build / preview of the web app
-- `pnpm check` — `svelte-kit sync` + `svelte-check` (type-check; this repo has no test suite or linter)
+- `pnpm check` — `svelte-kit sync` + `svelte-check` (type-check; no test suite. The api declares `pytest`/`ruff` as dev deps with a `[tool.ruff]` config in `api/pyproject.toml`, but no script runs them)
 - `pnpm seed` — clears `items` collection and inserts 3 seed documents via `tsx src/scripts/seed.ts` (loads the root `.env`, bypassing SvelteKit)
 
 MongoDB runs as a local Docker container on port 27017 (name `mongodb`, restart policy `always`), created manually via `docker run` — there is no compose file in the repo.

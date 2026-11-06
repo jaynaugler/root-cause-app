@@ -1,6 +1,6 @@
 # root-cause-app
 
-A hackathon monorepo: SvelteKit 5 web app (`web/`) plus a FastAPI + MongoDB service (`api/`). shadcn-svelte UI, Tailwind CSS v4, zod-validated form actions, and a Dockerized local MongoDB. The UI calls the Python API through a same-origin `/api/*` proxy in dev.
+A hackathon monorepo: SvelteKit 3 / Svelte 5 web app (`web/`) plus a FastAPI + MongoDB service (`api/`). shadcn-svelte UI, Tailwind CSS v4, zod-validated form actions, and a Dockerized local MongoDB. The UI calls the Python API through a same-origin `/api/*` proxy in dev.
 
 ## Requirements
 
@@ -47,7 +47,7 @@ A hackathon monorepo: SvelteKit 5 web app (`web/`) plus a FastAPI + MongoDB serv
    pnpm dev:api    # FastAPI API → http://localhost:8000
    ```
 
-   The web app proxies `/api/*` to the API, so the browser can call it same-origin (docs are also served at `/api/docs` through the proxy, or directly at `http://localhost:8000/docs`).
+   The web app proxies `/api/*` to the API, so the browser can call it same-origin. The API's Swagger docs are served directly at `http://localhost:8000/docs` (they are not under the `/api` prefix, so the proxy does not forward them).
 
 ## Commands
 
@@ -69,7 +69,7 @@ A hackathon monorepo: SvelteKit 5 web app (`web/`) plus a FastAPI + MongoDB serv
 - `web/src/lib/components/ui/` — shadcn-svelte components
 - `web/src/scripts/seed.ts` — standalone seeding script (`tsx` + `dotenv`, independent of SvelteKit)
 - `web/vite.config.ts` — Kit 3 configuration (inline: no `svelte.config.js`) incl. the `/api` dev proxy
-- `api/app/main.py` — FastAPI app (`/health`, `/api/docs`)
+- `api/app/main.py` — FastAPI app (`/health`, Swagger docs at `/docs`)
 - `api/app/items.py` — `GET|POST /api/items` starter resource over the shared `items` collection
 - `api/app/config.py` / `api/app/db.py` — settings (root `.env`, cwd-independent) and motor client singleton
 
@@ -102,4 +102,4 @@ Set the env vars **before the first build** — public env values are inlined at
 
 - Imports use the `#lib` alias (not `$lib`):
   `import { getDb } from '#lib/server/db.js';`
-- To deploy, replace `@sveltejs/adapter-auto` in `web/vite.config.ts` with the adapter for your target platform (Node, Vercel, etc.). The `/api/*` proxy is dev-only — production needs a reverse proxy in front of the two services.
+- To deploy, replace `@sveltejs/adapter-auto` in `web/vite.config.ts` with the adapter for your target platform (Node, Vercel, etc.).
