@@ -3,9 +3,9 @@
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
 
-	// Mirrors the response of POST /api/pdf-metadata (api/app/pdf.py)
-	type PdfMetadata = {
-		title: string | null;
+	// Mirrors the response of POST /api/pdf-metadata (api/app/pdf.py) —
+	// the shape of the eventual `resources` record, plus extraction details.
+	type Details = {
 		author: string | null;
 		subject: string | null;
 		creator: string | null;
@@ -15,11 +15,21 @@
 		pageCount: number;
 		extra: Record<string, string>;
 	};
+	type ResourceRecord = {
+		title: string | null;
+		link: string;
+		summary: string | null;
+		attribution: string | null;
+		resourceformat: string;
+		contentcategory: string | null;
+		imgurl: string | null;
+		details: Details;
+	};
 
 	let url = $state('');
 	let loading = $state(false);
 	let error = $state<string | null>(null);
-	let meta = $state<PdfMetadata | null>(null);
+	let meta = $state<ResourceRecord | null>(null);
 
 	async function lookup(event: SubmitEvent) {
 		event.preventDefault();
@@ -49,7 +59,7 @@
 						? detail
 						: `Request failed with status ${res.status}.`;
 			} else {
-				meta = (await res.json()) as PdfMetadata;
+				meta = (await res.json()) as ResourceRecord;
 			}
 		} catch {
 			error = 'Could not reach the API.';
@@ -63,7 +73,7 @@
 	<Card.Root>
 		<Card.Header>
 			<Card.Title>PDF metadata</Card.Title>
-			<Card.Description>Paste a link to a PDF to extract its metadata.</Card.Description>
+			<Card.Description>Paste a link to a PDF to extract a resource record.</Card.Description>
 		</Card.Header>
 		<Card.Content class="space-y-4">
 			<form onsubmit={lookup} class="space-y-2">
@@ -79,28 +89,43 @@
 			</form>
 
 			{#if meta}
-				<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-					<dt class="font-medium">Title</dt>
-					<dd>{meta.title ?? '—'}</dd>
-					<dt class="font-medium">Author</dt>
-					<dd>{meta.author ?? '—'}</dd>
-					<dt class="font-medium">Subject</dt>
-					<dd>{meta.subject ?? '—'}</dd>
-					<dt class="font-medium">Creator</dt>
-					<dd>{meta.creator ?? '—'}</dd>
-					<dt class="font-medium">Producer</dt>
-					<dd>{meta.producer ?? '—'}</dd>
-					<dt class="font-medium">Created</dt>
-					<dd>{meta.creationDate ?? '—'}</dd>
-					<dt class="font-medium">Modified</dt>
-					<dd>{meta.modDate ?? '—'}</dd>
-					<dt class="font-medium">Pages</dt>
-					<dd>{meta.pageCount}</dd>
-					{#each Object.entries(meta.extra) as [key, value] (key)}
-						<dt class="font-medium">{key}</dt>
-						<dd>{value}</dd>
-					{/each}
-				</dl>
+				<div class="space-y-3">
+					<div class="space-y-1">
+						<h3 class="text-lg font-semibold leading-none">{meta.title ?? 'Untitled'}</h3>
+						<p class="break-all text-xs text-muted-foreground">{meta.link}</p>
+					</div>
+
+					{#if meta.summary}
+						<p class="text-sm leading-relaxed">{meta.summary}</p>
+					{:else}
+						<p class="text-sm text-muted-foreground">No text layer found (scanned PDF?).</p>
+					{/if}
+
+					<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+						<dt class="font-medium">Attribution</dt>
+						<dd>{meta.attribution ?? '—'}</dd>
+						<dt class="font-medium">Format</dt>
+						<dd>{meta.resourceformat}</dd>
+						<dt class="font-medium">Category</dt>
+						<dd>{meta.contentcategory ?? '—'}</dd>
+						<dt class="font-medium">Author</dt>
+						<dd>{meta.details.author ?? '—'}</dd>
+						<dt class="font-medium">Creator</dt>
+						<dd>{meta.details.creator ?? '—'}</dd>
+						<dt class="font-medium">Producer</dt>
+						<dd>{meta.details.producer ?? '—'}</dd>
+						<dt class="font-medium">Created</dt>
+						<dd>{meta.details.creationDate ?? '—'}</dd>
+						<dt class="font-medium">Modified</dt>
+						<dd>{meta.details.modDate ?? '—'}</dd>
+						<dt class="font-medium">Pages</dt>
+						<dd>{meta.details.pageCount}</dd>
+						{#each Object.entries(meta.details.extra) as [key, value] (key)}
+							<dt class="font-medium">{key}</dt>
+							<dd>{value}</dd>
+						{/each}
+					</dl>
+				</div>
 			{/if}
 		</Card.Content>
 	</Card.Root>
