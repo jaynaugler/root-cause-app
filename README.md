@@ -79,15 +79,16 @@ The web app hosts on **Vercel**, the API on **Render**, both pointing at **Mongo
 
 ### Render (API)
 
+Runs with the **Docker runtime** (`api/Dockerfile`) — the native Python runtime can't install system packages, and PDF OCR (`api/app/pdf.py`) needs `tesseract-ocr`. Build/start commands and the port come from the Dockerfile (`CMD` binds `$PORT`).
+
 | Setting            | Value                                                          |
 | ------------------ | -------------------------------------------------------------- |
 | Root Directory     | `api`                                                          |
-| Build command      | `pip install uv && uv sync --active --frozen --no-dev`         |
-| Start command      | `uvicorn app.main:app --host 0.0.0.0 --port $PORT`             |
+| Language / Runtime | Docker (uses `api/Dockerfile` + `api/.dockerignore`)           |
 | Health Check Path  | `/health`                                                      |
 | Environment        | `ATLAS_URI`, `ATLAS_DB` (optionally `ALLOWED_ORIGINS` — comma-separated origins allowed to bypass the proxy) |
 
-`--active` makes uv install into **Render's** managed venv (without it, uv ignores `VIRTUAL_ENV` and `uvicorn` is not on `PATH`). Note the free tier sleeps after ~15 min idle — first request cold-starts in ~30–60s.
+Note the free tier sleeps after ~15 min idle — first request cold-starts in ~30–60s (plus image build on first deploy).
 
 ### Vercel (web app)
 
