@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import secrets
 from typing import Literal
 
@@ -19,6 +20,9 @@ SCORE_THRESHOLD = float(os.environ.get("SCORE_THRESHOLD", "0.6"))
 # Summary settings
 SUMMARY_PROVIDER = os.environ.get("SUMMARY_PROVIDER", "ollama")
 SUMMARY_SOURCES = int(os.environ.get("SUMMARY_SOURCES", "5"))
+# Max answer length. Used both to trim answers we return and to validate the
+# history sent back, so our own answers always pass. Mirrored in web/src/lib/search.ts.
+MAX_SUMMARY_CHARS = 2000
 
 # Ollama settings (local)
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://ollama:11434")
@@ -48,7 +52,7 @@ app = FastAPI(title="BCCNS Search API")
 class Turn(BaseModel):
     """One earlier question and its answer."""
     question: str = Field(min_length=1, max_length=500)
-    summary: str | None = Field(default=None, max_length=2000)
+    summary: str | None = Field(default=None, max_length=MAX_SUMMARY_CHARS)
 
 
 class SearchRequest(BaseModel):
@@ -120,6 +124,21 @@ async def ask_gemini(prompt):
     return "".join(part.get("text", "") for part in parts).strip()
 
 
+SENTENCE_END = re.compile(r"[.!?](?=\s)")
+
+
+def trim(text):
+    """Keep answers within MAX_SUMMARY_CHARS, cutting at a sentence end if possible."""
+    if len(text) <= MAX_SUMMARY_CHARS:
+        return text
+    cut = text[:MAX_SUMMARY_CHARS]
+    ends = [m.end() for m in SENTENCE_END.finditer(cut)]
+    # Only cut at a sentence end if that keeps at least half the text
+    if ends and ends[-1] >= MAX_SUMMARY_CHARS // 2:
+        return cut[: ends[-1]]
+    return cut.rstrip()
+
+
 async def summarize(question, hits, provider, history=()):
     """Returns (summary, provider_used). Falls back to Ollama if Gemini fails."""
     if not hits:
@@ -129,12 +148,12 @@ async def summarize(question, hits, provider, history=()):
 
     if provider == "gemini":
         try:
-            return await ask_gemini(prompt), "gemini"
+            return trim(await ask_gemini(prompt)), "gemini"
         except Exception as error:
             logger.warning("Gemini failed, falling back to Ollama: %s", error)
 
     try:
-        return await ask_ollama(prompt), "ollama"
+        return trim(await ask_ollama(prompt)), "ollama"
     except Exception as error:
         logger.warning("Ollama failed: %s", error)
         return None, None
