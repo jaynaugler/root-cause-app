@@ -56,6 +56,22 @@
 	let followUp = $state('');
 	let followUpInput = $state<HTMLInputElement | null>(null);
 
+	// The "Recent records" browse list: open on a fresh visit, auto-collapses
+	// as soon as a search starts, then it's just a triangle the user can
+	// toggle (bind:open keeps manual opens/closes sticky while the thread lives).
+	// Driven by `turns`, not `visibleTurns`: a new search temporarily hides the
+	// thread and must NOT pop this open mid-search.
+	let recentsOpen = $state(true);
+	let threadHasTurns = $state(false); // so the reopen only fires on emptying, not every render
+	$effect(() => {
+		if (turns.length) {
+			threadHasTurns = true;
+		} else if (threadHasTurns) {
+			threadHasTurns = false;
+			recentsOpen = true;
+		}
+	});
+
 	// Without JavaScript the form does a normal page reload and the answer arrives as `form`
 	const turns = $derived<ThreadTurn[]>(
 		thread.length ? thread : form?.results ? [form as unknown as ThreadTurn] : []
@@ -86,6 +102,7 @@
 		return ({ formData }) => {
 			pending = { mode, question: formData.get('question')?.toString().trim() ?? '' };
 			errorFor = mode;
+			recentsOpen = false; // a search starting shouldn't wait for results to reclaim space
 
 			// Follow-up: move the question + loading placeholder to the top right away, so the
 			// answer appears where you are looking (not off-screen below the follow-up bar).
@@ -156,10 +173,12 @@
 		</form>
 	</header>
 
-	<!-- Landing state: a browse list until the first search produces a thread -->
-	{#if !visibleTurns.length}
-		<section class="space-y-3">
-			<h2 class="text-lg font-medium">Recent records</h2>
+	<!-- Browse list: open on a fresh visit; collapses on search, then it's a toggle -->
+	<details bind:open={recentsOpen} class="space-y-3">
+		<summary class="cursor-pointer text-sm font-medium text-muted-foreground select-none">
+			Recent records
+		</summary>
+		<div class="mt-3 space-y-3">
 			{#if data.defaultRecords.length}
 				<div class="grid grid-cols-1 gap-3 md:grid-cols-3">
 					{#each data.defaultRecords as record, i (record.id)}
@@ -172,8 +191,8 @@
 					<a href="/submit" class="underline">submit page</a>.
 				</p>
 			{/if}
-		</section>
-	{/if}
+		</div>
+	</details>
 
 	<!-- The thread: question → summary → records, oldest first -->
 	{#each visibleTurns as turn, t (t)}
