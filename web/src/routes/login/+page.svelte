@@ -1,28 +1,15 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
+	import { enhance } from '$app/forms';
 	import * as Card from '#lib/components/ui/card/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import { Label } from '#lib/components/ui/label/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import pattern from '#lib/assets/backgroundPattern.webp';
+	import type { PageProps } from './$types';
 
-	let username = $state('');
-	let password = $state('');
-	let error = $state('');
-
-	function handleSubmit(event: SubmitEvent) {
-		event.preventDefault();
-
-		if (!username.trim() || !password) {
-			error = 'Enter your username and password.';
-			return;
-		}
-
-		error = '';
-		// TEMPORARY: there is no real login check yet.
-		// The team will replace this with the real check later.
-		goto('/submit');
-	}
+	// `form` = what the action in +page.server.ts returned after a failed login
+	// (field errors, or the general "Invalid email or password." message).
+	let { form }: PageProps = $props();
 </script>
 
 <svelte:head>
@@ -59,29 +46,37 @@
 		<Card.Root class="w-full max-w-md md:max-w-xl lg:max-w-2xl">
 			<Card.Header>
 				<Card.Title class="text-2xl">Organisation login</Card.Title>
-				<Card.Description>Use the username and password given to your organisation.</Card.Description>
+				<Card.Description>Log in with your email and password.</Card.Description>
 			</Card.Header>
 
 			<Card.Content>
-				<form onsubmit={handleSubmit} class="space-y-4" novalidate>
+				<!-- Posts to the default action in +page.server.ts. novalidate: the server
+				     does the checking and shows its messages below each field. -->
+				<form method="POST" use:enhance class="space-y-4" novalidate>
 					<div class="space-y-2">
-						<Label for="username">Username</Label>
-						<Input id="username" name="username" autocomplete="username" bind:value={username} />
+						<Label for="email">Email</Label>
+						<Input
+							id="email"
+							name="email"
+							type="email"
+							autocomplete="email"
+							value={form?.email ?? ''}
+						/>
+						{#if form?.errors?.email}
+							<p class="text-sm font-medium text-[#A84A42]">{form.errors.email[0]}</p>
+						{/if}
 					</div>
 
 					<div class="space-y-2">
 						<Label for="password">Password</Label>
-						<Input
-							id="password"
-							name="password"
-							type="password"
-							autocomplete="current-password"
-							bind:value={password}
-						/>
+						<Input id="password" name="password" type="password" autocomplete="current-password" />
+						{#if form?.errors?.password}
+							<p class="text-sm font-medium text-[#A84A42]">{form.errors.password[0]}</p>
+						{/if}
 					</div>
 
-					{#if error}
-						<p class="text-sm font-medium text-[#A84A42]" role="alert">{error}</p>
+					{#if form?.message}
+						<p class="text-sm font-medium text-[#A84A42]" role="alert">{form.message}</p>
 					{/if}
 
 					<div class="flex justify-center pt-2">
@@ -91,7 +86,7 @@
 					</div>
 
 					<p class="text-center text-sm text-muted-foreground">
-						Need an account? Contact the Black Cultural Centre.
+						Need an account? <a href="/register" class="underline">Create one</a>
 					</p>
 				</form>
 			</Card.Content>
