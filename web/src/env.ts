@@ -19,6 +19,15 @@ export const variables = defineEnvVars({
 		schema: (value) => value?.trim() || undefined,
 		description: 'Local database name (optional; defaults to root-cause_db).'
 	},
+	SEARCH_API_URL: {
+		schema: (value) => value?.trim().replace(/\/+$/, '') || undefined,
+		description:
+			'Base URL of the search-server search-api (e.g. the Cloudflare tunnel URL), without /api/search.'
+	},
+	SEARCH_API_KEY: {
+		schema: (value) => value?.trim() || undefined,
+		description: 'Sent as X-API-Key to the search-api. Server-only — never expose to the browser.'
+	},
 	PUBLIC_API_BASE_URL: {
 		schema: (value) => value?.trim() || '',
 		description:
