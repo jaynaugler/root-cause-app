@@ -134,6 +134,18 @@
 						<p class="break-all text-xs text-muted-foreground">{meta.link}</p>
 					</div>
 
+					<div class="space-y-1">
+						<label class="text-xs font-medium text-muted-foreground" for="sitelink">
+							Site hosting this resource (optional — e.g. https://bccns.com/resources/)
+						</label>
+						<Input
+							id="sitelink"
+							type="url"
+							placeholder="https://bccns.com/resources/"
+							bind:value={sitelinkInput}
+						/>
+					</div>
+
 					{#if meta.description}
 						<p class="text-sm font-medium leading-relaxed">{meta.description}</p>
 					{:else}
@@ -169,18 +181,6 @@
 							<dd>{value}</dd>
 						{/each}
 					</dl>
-
-					<div class="space-y-1">
-						<label class="text-xs font-medium text-muted-foreground" for="sitelink">
-							Site hosting this resource (optional — e.g. https://bccns.com/resources/)
-						</label>
-						<Input
-							id="sitelink"
-							type="url"
-							placeholder="https://bccns.com/resources/"
-							bind:value={sitelinkInput}
-						/>
-					</div>
 
 					<div class="flex items-center gap-3">
 						<Button onclick={saveRecord} disabled={saving || !meta}>
