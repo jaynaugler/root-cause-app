@@ -43,7 +43,10 @@ if (dev) {
 
 export async function getResourceModel(): Promise<mongoose.Model<ResourceDoc>> {
 	const connection = await connectionPromise;
-	return connection.model<ResourceDoc>('Resource', resourceSchema);
+	// The connection survives Vite HMR reloads (globalThis singleton), so a
+	// re-imported schema would fail with OverwriteModelError — reuse the
+	// already-compiled model if present.
+	return connection.models.Resource ?? connection.model<ResourceDoc>('Resource', resourceSchema);
 }
 
 export type { ResourceDoc } from './resource-schema.js';
