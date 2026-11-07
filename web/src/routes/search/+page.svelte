@@ -7,6 +7,7 @@
 	import ResultsCard from '#lib/components/resultsCard/ResultsCard.svelte';
 	import MagicBorder from '#lib/components/search/MagicBorder.svelte';
 	import { MAX_HISTORY, type ThreadTurn } from '#lib/search.js';
+	import OrangePattern from '#lib/assets/OrangePattern.jpg';
 
 	let { form } = $props();
 
@@ -138,8 +139,17 @@
 						disabled={!!pending}
 					/>
 				</MagicBorder>
-				<Button type="submit" disabled={!!pending}>
-					{pending?.mode === 'new' ? 'Searching…' : 'Search'}
+				<Button
+					type="submit"
+					disabled={!!pending}
+					class="self-stretch inline-flex w-40 items-center justify-between overflow-hidden rounded-md bg-search-btn p-0 text-white hover:bg-search-btn-hover"
+				>
+					<img
+						src={OrangePattern}
+						alt=""
+						class="size-12 shrink-0 rounded-l-md object-cover"
+					/>
+					<span class="px-3">{pending?.mode === 'new' ? 'Searching…' : 'Search'}</span>
 				</Button>
 			</div>
 			{@render errors('new')}
@@ -217,7 +227,7 @@
 					<Button type="submit" disabled={!!pending}>
 						{pending?.mode === 'followup' ? 'Asking…' : 'Ask'}
 					</Button>
-				</div>
+					</div>
 				{@render errors('followup')}
 			</div>
 		</form>
