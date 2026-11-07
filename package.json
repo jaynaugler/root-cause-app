@@ -10,8 +10,10 @@
 		"build": "pnpm -C web build",
 		"preview": "pnpm -C web preview",
 		"check": "pnpm -C web check",
+		"test": "pnpm -C web test",
 		"seed": "pnpm -C web seed",
 		"db:setup": "pnpm -C web db:setup",
+		"make-admin": "pnpm -C web make-admin",
 		"api:sync": "uv sync --project api"
 	}
 }
