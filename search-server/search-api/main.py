@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import secrets
 from typing import Literal
 
@@ -19,6 +20,9 @@ SCORE_THRESHOLD = float(os.environ.get("SCORE_THRESHOLD", "0.6"))
 # Summary settings
 SUMMARY_PROVIDER = os.environ.get("SUMMARY_PROVIDER", "ollama")
 SUMMARY_SOURCES = int(os.environ.get("SUMMARY_SOURCES", "5"))
+# Max answer length. Used both to trim answers we return and to validate the
+# history sent back, so our own answers always pass. Mirrored in web/src/lib/search.ts.
+MAX_SUMMARY_CHARS = 2000
 
 # Ollama settings (local)
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://ollama:11434")
@@ -35,6 +39,8 @@ SYSTEM_PROMPT = (
     "You summarize search results for a Black history archive hub. "
     "Answer the user's question using ONLY the numbered sources provided. "
     "Cite sources with their number in square brackets, like [1] or [2]. "
+    "Use the previous conversation only to understand what the question refers to; "
+    "facts and citations must come from the numbered sources. "
     "Write 2 to 4 sentences. Answer in the same language as the question. "
     "If the sources do not answer the question, say that the records found "
     "do not cover it. Never invent names, dates or facts."
@@ -43,14 +49,27 @@ SYSTEM_PROMPT = (
 app = FastAPI(title="BCCNS Search API")
 
 
+class Turn(BaseModel):
+    """One earlier question and its answer."""
+    question: str = Field(min_length=1, max_length=500)
+    summary: str | None = Field(default=None, max_length=MAX_SUMMARY_CHARS)
+
+
 class SearchRequest(BaseModel):
     question: str = Field(min_length=1, max_length=500)
     limit: int = Field(default=8, ge=1, le=20)
     provider: Literal["ollama", "gemini"] | None = None
+    history: list[Turn] = Field(default_factory=list, max_length=3)  # oldest first
 
 
-def build_prompt(question, hits):
-    """Numbered sources + the question, as one text for the model."""
+def search_text(question, history):
+    """Earlier questions + the new one, so 'Was she pardoned?' still finds Viola Desmond."""
+    previous = [turn.question for turn in history[-2:]]
+    return " ".join(previous + [question])
+
+
+def build_prompt(question, hits, history=()):
+    """Conversation (if any) + numbered sources + the question, as one text."""
     blocks = []
     for number, hit in enumerate(hits[:SUMMARY_SOURCES], start=1):
         blocks.append(
@@ -59,7 +78,15 @@ def build_prompt(question, hits):
             f"Held by: {hit.get('attribution', 'unknown')}"
         )
     sources = "\n\n".join(blocks)
-    return f"Sources:\n\n{sources}\n\nQuestion: {question}"
+
+    context = ""
+    if history:
+        turns = "\n\n".join(
+            f"Q: {turn.question}\nA: {turn.summary or '(no answer)'}" for turn in history
+        )
+        context = f"Previous conversation:\n\n{turns}\n\n"
+
+    return f"{context}Sources:\n\n{sources}\n\nQuestion: {question}"
 
 
 async def ask_ollama(prompt):
@@ -97,21 +124,36 @@ async def ask_gemini(prompt):
     return "".join(part.get("text", "") for part in parts).strip()
 
 
-async def summarize(question, hits, provider):
+SENTENCE_END = re.compile(r"[.!?](?=\s)")
+
+
+def trim(text):
+    """Keep answers within MAX_SUMMARY_CHARS, cutting at a sentence end if possible."""
+    if len(text) <= MAX_SUMMARY_CHARS:
+        return text
+    cut = text[:MAX_SUMMARY_CHARS]
+    ends = [m.end() for m in SENTENCE_END.finditer(cut)]
+    # Only cut at a sentence end if that keeps at least half the text
+    if ends and ends[-1] >= MAX_SUMMARY_CHARS // 2:
+        return cut[: ends[-1]]
+    return cut.rstrip()
+
+
+async def summarize(question, hits, provider, history=()):
     """Returns (summary, provider_used). Falls back to Ollama if Gemini fails."""
     if not hits:
         return None, None
 
-    prompt = build_prompt(question, hits)
+    prompt = build_prompt(question, hits, history)
 
     if provider == "gemini":
         try:
-            return await ask_gemini(prompt), "gemini"
+            return trim(await ask_gemini(prompt)), "gemini"
         except Exception as error:
             logger.warning("Gemini failed, falling back to Ollama: %s", error)
 
     try:
-        return await ask_ollama(prompt), "ollama"
+        return trim(await ask_ollama(prompt)), "ollama"
     except Exception as error:
         logger.warning("Ollama failed: %s", error)
         return None, None
@@ -128,9 +170,9 @@ async def search(req: SearchRequest, x_api_key: str = Header(default="")):
     if not secrets.compare_digest(x_api_key, API_KEY):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    # 2. Search Meilisearch
+    # 2. Search Meilisearch (earlier questions help with "she", "it", etc.)
     body = {
-        "q": req.question,
+        "q": search_text(req.question, req.history),
         "hybrid": {"embedder": "default", "semanticRatio": SEMANTIC_RATIO},
         "limit": req.limit,
         "rankingScoreThreshold": SCORE_THRESHOLD,
@@ -148,6 +190,6 @@ async def search(req: SearchRequest, x_api_key: str = Header(default="")):
 
     # 3. Summary: the request's choice, or the default
     provider = req.provider or SUMMARY_PROVIDER
-    summary, used = await summarize(req.question, hits, provider)
+    summary, used = await summarize(req.question, hits, provider, req.history)
 
     return {"summary": summary, "provider": used, "results": hits}
