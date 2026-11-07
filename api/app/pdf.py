@@ -1,7 +1,8 @@
-"""Download a PDF by URL and return a resource record: extractable summary,
+"""Download a PDF by URL and return a resource record: extracted description,
 title, attribution, plus detailed document metadata. No persistence."""
 
 import asyncio
+import logging
 import shutil
 from datetime import datetime
 from http import HTTPStatus
@@ -16,7 +17,10 @@ from pydantic import BaseModel, HttpUrl
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError, PyPdfError
 
+from app.ai import clean_record
+
 router = APIRouter(tags=["pdf"])
+logger = logging.getLogger("uvicorn.error")
 
 MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 DOWNLOAD_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
@@ -259,17 +263,19 @@ async def _run_pdf_metadata(payload: PdfUrlIn) -> dict:
 	# instead of the capped first-pages summary.
 	short_doc = page_count <= 1
 
-	return {
+	record = {
 		"title": _ser(title) or None,
 		"link": str(payload.url),
-		"summary": _summarize(
+		"description": _summarize(
 			_extract_text(reader, full=short_doc, data=data),
 			MAX_FULL_TEXT_CHARS if short_doc else MAX_SUMMARY_CHARS,
 		),
+		"summary": None,  # full cleaned summary — filled by the Gemini cleanup
 		"attribution": _ser(raw.get("/Author")) or _ser(raw.get("/Creator")) or None,
 		"resourceformat": "pdf",
-		"contentcategory": None,  # classification comes later
+		"contentcategory": None,  # filled by the Gemini cleanup
 		"imgurl": None,  # cover-image extraction comes later
+		"status": None,  # stamped by the submit/approval flow at Mongo insert
 		"details": {
 			"author": _ser(raw.get("/Author")),
 			"subject": _ser(raw.get("/Subject")),
@@ -285,3 +291,29 @@ async def _run_pdf_metadata(payload: PdfUrlIn) -> dict:
 			},
 		},
 	}
+
+	# Debug aid: the pre-clean record, so callers can diff raw vs cleaned.
+	# The insert flow strips it exactly like `details`. Shallow copy is fine —
+	# only top-level fields are later overwritten.
+	record["raw"] = {k: v for k, v in record.items() if k != "raw"}
+
+	# Clean the record with Gemini. Failure of any kind — no key, bad model
+	# name, timeout, malformed reply — returns the raw record instead.
+	try:
+		cleaned = await clean_record(
+			{
+				"title": record["title"],
+				"attribution": record["attribution"],
+				"author": _ser(raw.get("/Author")),
+				"creator": _ser(raw.get("/Creator")),
+				"subject": _ser(raw.get("/Subject")),
+				"text": record["description"],
+			}
+		)
+	except Exception as exc:  # noqa: BLE001 — cleanup must never kill the fetch
+		logger.warning("Gemini cleanup failed, returning the raw record: %s", exc)
+		return record
+
+	# Only overwrite with non-null cleaned values, so an unsure model never
+	# erases data that came straight out of the document.
+	return {**record, **{k: v for k, v in cleaned.items() if v is not None}}
