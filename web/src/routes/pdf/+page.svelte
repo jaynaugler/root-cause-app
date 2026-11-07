@@ -33,6 +33,38 @@
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 	let meta = $state<ResourceRecord | null>(null);
+	let saving = $state(false);
+	let savedId = $state<string | null>(null);
+	let saveError = $state<string | null>(null);
+
+	async function saveRecord() {
+		if (!meta) return;
+		saving = true;
+		savedId = null;
+		saveError = null;
+		try {
+			const res = await fetch('/resources', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(meta)
+			});
+			const body = (await res.json().catch(() => null)) as
+				| { detail?: string; error?: string; issues?: unknown[] }
+				| string
+				| null;
+			if (res.status === 201 && typeof body === 'string') {
+				savedId = body;
+			} else if (typeof body === 'object' && body?.error) {
+				saveError = body.error;
+			} else {
+				saveError = `Save failed with status ${res.status}.`;
+			}
+		} catch {
+			saveError = 'Could not reach the server.';
+		} finally {
+			saving = false;
+		}
+	}
 
 	async function lookup(event: SubmitEvent) {
 		event.preventDefault();
@@ -133,6 +165,17 @@
 							<dd>{value}</dd>
 						{/each}
 					</dl>
+
+					<div class="flex items-center gap-3">
+						<Button onclick={saveRecord} disabled={saving || !meta}>
+							{saving ? 'Saving…' : 'Save to resources'}
+						</Button>
+						{#if savedId}
+							<span class="text-sm font-medium text-green-600">Saved ✓ ({savedId})</span>
+						{:else if saveError}
+							<span class="text-sm font-medium text-red-500">{saveError}</span>
+						{/if}
+					</div>
 
 					<!-- Debug: strip before Mongo insert, like `details` -->
 					<details class="mt-4">
