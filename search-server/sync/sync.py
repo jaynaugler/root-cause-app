@@ -19,8 +19,9 @@ MEILI_INDEX = os.environ.get("MEILI_INDEX", "records")
 APPROVED_ONLY = os.environ.get("APPROVED_ONLY", "false").lower() == "true"
 
 # Fields copied from MongoDB to Meilisearch
-# (description = short card teaser; summary = full text used for search)
-FIELDS = ["title", "description", "summary", "attribution", "link",
+# (description = short card teaser; summary = full text used for search;
+#  link = the resource itself, sitelink = the page hosting it)
+FIELDS = ["title", "description", "summary", "attribution", "link", "sitelink",
           "resourceformat", "contentcategory", "imgurl"]
 
 meili = httpx.Client(

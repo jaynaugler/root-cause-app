@@ -30,6 +30,8 @@ const RESOURCE_SCHEMA = {
 		_id: { bsonType: 'objectId' },
 		title: { bsonType: ['string', 'null'], maxLength: 300 },
 		link: { bsonType: 'string', pattern: '^https?://', maxLength: 2000 },
+		// Optional (curator-supplied): the site page hosting the resource.
+		sitelink: { bsonType: ['string', 'null'], pattern: '^https?://', maxLength: 2000 },
 		description: { bsonType: ['string', 'null'], maxLength: 150 },
 		// minLength applies to strings only; null (fallback records) is still valid.
 		summary: { bsonType: ['string', 'null'], minLength: 250 },

@@ -266,6 +266,7 @@ async def _run_pdf_metadata(payload: PdfUrlIn) -> dict:
 	record = {
 		"title": _ser(title) or None,
 		"link": str(payload.url),
+		"sitelink": None,  # the site hosting this resource — curator fills it in
 		"description": _summarize(
 			_extract_text(reader, full=short_doc, data=data),
 			MAX_FULL_TEXT_CHARS if short_doc else MAX_SUMMARY_CHARS,
