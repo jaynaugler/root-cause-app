@@ -11,6 +11,7 @@ import { MAX_DESCRIPTION_LENGTH, MIN_SUMMARY_LENGTH } from '#lib/server/resource
 const insertSchema = z.object({
 	title: z.string().nullish(),
 	link: z.string(),
+	sitelink: z.string().nullish(),
 	description: z.string().nullish(),
 	summary: z.string().nullish(),
 	attribution: z.string().nullish(),
@@ -48,6 +49,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		const resource = await Resource.create({
 			title: data.title ?? null,
 			link: data.link,
+			sitelink: data.sitelink ?? null,
 			description,
 			summary,
 			attribution: data.attribution ?? null,

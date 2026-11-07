@@ -216,8 +216,11 @@ async def clean_record(fields: dict) -> dict:
 		"subject": fields.get("subject"),
 		"text": (fields.get("text") or "")[:MAX_INPUT_CHARS],
 	}
-	# The gate checks against exactly what was sent — this string, and nothing else.
-	given_text = USER_INSTRUCTIONS + json.dumps(record)
+	# The gate checks against exactly what was sent — this string, and nothing
+	# else. ensure_ascii=False matters: with the default, curly apostrophes in
+	# the source become ’ escapes and the gate can't match words like
+	# "Canada's" that ARE in the given data.
+	given_text = USER_INSTRUCTIONS + json.dumps(record, ensure_ascii=False)
 	payload = {
 		"system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
 		"contents": [{"role": "user", "parts": [{"text": given_text}]}],

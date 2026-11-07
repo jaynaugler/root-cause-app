@@ -18,6 +18,7 @@
 	type ResourceRecord = {
 		title: string | null;
 		link: string;
+		sitelink: string | null;
 		description: string | null;
 		summary: string | null;
 		attribution: string | null;
@@ -36,6 +37,9 @@
 	let saving = $state(false);
 	let savedId = $state<string | null>(null);
 	let saveError = $state<string | null>(null);
+	// Curator-supplied: the site page hosting the resource (the fetch pipeline
+	// only knows the direct link). Empty is valid — direct PDFs from unknown sites.
+	let sitelinkInput = $state('');
 
 	async function saveRecord() {
 		if (!meta) return;
@@ -46,7 +50,7 @@
 			const res = await fetch('/resources', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify(meta)
+				body: JSON.stringify({ ...meta, sitelink: sitelinkInput.trim() || null })
 			});
 			const body = (await res.json().catch(() => null)) as
 				| { detail?: string; error?: string; issues?: unknown[] }
@@ -128,6 +132,18 @@
 					<div class="space-y-1">
 						<h3 class="text-lg font-semibold leading-none">{meta.title ?? 'Untitled'}</h3>
 						<p class="break-all text-xs text-muted-foreground">{meta.link}</p>
+					</div>
+
+					<div class="space-y-1">
+						<label class="text-xs font-medium text-muted-foreground" for="sitelink">
+							Site hosting this resource (optional — e.g. https://bccns.com/resources/)
+						</label>
+						<Input
+							id="sitelink"
+							type="url"
+							placeholder="https://bccns.com/resources/"
+							bind:value={sitelinkInput}
+						/>
 					</div>
 
 					{#if meta.description}
