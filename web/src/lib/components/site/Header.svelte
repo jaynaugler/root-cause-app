@@ -2,16 +2,25 @@
 	import { fly, fade, slide } from 'svelte/transition';
 	import pattern from '#lib/assets/backgroundPattern.webp';
 
-	// Main menu items
-	const links = [
+	// The logged-in user from +layout.svelte, or null. App.Locals['user'] is the
+	// type declared in app.d.ts: { id, name, email, role } | null.
+	let { user }: { user: App.Locals['user'] } = $props();
+	// Only hides the menu. The real protection is server-side (hooks.server.ts).
+	let isAdmin = $derived(user?.role === 'admin');
+
+	// Main menu items. $derived: recalculated when `user` changes (log in / log out).
+	// "Submit request" only for logged-in users. Hiding it is just tidiness:
+	// /submit itself is protected by requireUser() in submit/+page.server.ts.
+	let links = $derived([
 		{ label: 'Home', href: '/' },
-		{ label: 'Submit request', href: '/login' }
-	];
+		...(user ? [{ label: 'Submit request', href: '/submit' }] : [])
+	]);
 
 	// Items inside the Admin dropdown
 	const adminLinks = [
-		{ label: 'Submitted requests', href: '/submitted-requests' },
-		{ label: 'Bad links', href: '/bad-links' }
+		// Everything under /admin is guarded by hooks.server.ts (admins only).
+		{ label: 'Submitted requests', href: '/admin/submitted-requests' },
+		{ label: 'Bad links', href: '/admin/bad-links' }
 	];
 
 	let menuOpen = $state(false); // is the phone drawer open?
@@ -55,7 +64,8 @@
 				</li>
 			{/each}
 
-			<!-- Admin dropdown -->
+			<!-- Admin dropdown (admins only) -->
+			{#if isAdmin}
 			<li class="relative" bind:this={adminMenuEl}>
 				<button
 					type="button"
@@ -88,6 +98,22 @@
 					</ul>
 				{/if}
 			</li>
+			{/if}
+
+			<!-- Account: log in, or name + log out -->
+			{#if user}
+				<li class="flex items-center gap-4">
+					<span class="font-normal text-muted-foreground">Hi, {user.name}</span>
+					<!-- A form, not a link: logout must be a POST (see routes/logout/+server.ts) -->
+					<form method="POST" action="/logout">
+						<button type="submit" class="font-semibold hover:text-[#9A3412]">Log out</button>
+					</form>
+				</li>
+			{:else}
+				<li>
+					<a href="/login" class="hover:text-[#9A3412]">Log in</a>
+				</li>
+			{/if}
 		</ul>
 
 		<!-- PHONES: hamburger button -->
@@ -156,7 +182,8 @@
 					</li>
 				{/each}
 
-				<!-- Admin: tap to open its two links -->
+				<!-- Admin: tap to open its two links (admins only) -->
+				{#if isAdmin}
 				<li>
 					<button
 						type="button"
@@ -188,6 +215,34 @@
 						</ul>
 					{/if}
 				</li>
+				{/if}
+
+				<!-- Account -->
+				{#if user}
+					<li class="px-2 pt-5 text-base font-normal text-muted-foreground">
+						Logged in as {user.name}
+					</li>
+					<li>
+						<form method="POST" action="/logout">
+							<button
+								type="submit"
+								class="block w-full border-b border-orange-100 px-2 py-5 text-left font-semibold hover:text-[#9A3412]"
+							>
+								Log out
+							</button>
+						</form>
+					</li>
+				{:else}
+					<li>
+						<a
+							href="/login"
+							class="block border-b border-orange-100 px-2 py-5 hover:text-[#9A3412]"
+							onclick={closeDrawer}
+						>
+							Log in
+						</a>
+					</li>
+				{/if}
 			</ul>
 		</div>
 	</div>
