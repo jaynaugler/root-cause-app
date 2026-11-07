@@ -4,7 +4,7 @@
 	import * as Card from '#lib/components/ui/card/index.js';
 
 	// Mirrors the response of POST /api/pdf-metadata (api/app/pdf.py) —
-	// the shape of the eventual `resources` record, plus extraction details.
+	// the shape of the eventual `resources` record (details are UI-only).
 	type Details = {
 		author: string | null;
 		subject: string | null;
@@ -18,11 +18,12 @@
 	type ResourceRecord = {
 		title: string | null;
 		link: string;
-		summary: string | null;
+		description: string | null;
 		attribution: string | null;
 		resourceformat: string;
 		contentcategory: string | null;
 		imgurl: string | null;
+		status: string | null;
 		details: Details;
 	};
 
@@ -95,8 +96,8 @@
 						<p class="break-all text-xs text-muted-foreground">{meta.link}</p>
 					</div>
 
-					{#if meta.summary}
-						<p class="text-sm leading-relaxed">{meta.summary}</p>
+					{#if meta.description}
+						<p class="text-sm leading-relaxed">{meta.description}</p>
 					{:else}
 						<p class="text-sm text-muted-foreground">No text layer found (scanned PDF?).</p>
 					{/if}
@@ -108,6 +109,8 @@
 						<dd>{meta.resourceformat}</dd>
 						<dt class="font-medium">Category</dt>
 						<dd>{meta.contentcategory ?? '—'}</dd>
+						<dt class="font-medium">Status</dt>
+						<dd>{meta.status ?? '—'}</dd>
 						<dt class="font-medium">Author</dt>
 						<dd>{meta.details.author ?? '—'}</dd>
 						<dt class="font-medium">Creator</dt>
