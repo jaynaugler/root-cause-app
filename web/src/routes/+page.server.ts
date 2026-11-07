@@ -8,7 +8,7 @@ import {
 	type SearchResponse,
 	type ThreadTurn
 } from '#lib/search.js';
-import type { Actions } from './$types';
+import type { Actions, PageServerLoad } from './$types';
 
 // Same limits as SearchRequest in search-api/main.py
 const searchSchema = z.object({
@@ -87,5 +87,50 @@ export const actions: Actions = {
 		const result = (await response.json()) as SearchResponse;
 		const turn: ThreadTurn = { question, ...result };
 		return turn;
+	}
+};
+
+import { getResourceModel } from '#lib/server/resources.js';
+
+// Landing state: recent approved records so the page has content before the
+// first search. A database failure must not take the whole page down — an
+// empty list just means the browse section falls back to the "no records" note.
+export const load: PageServerLoad = async () => {
+	try {
+		const Resource = await getResourceModel();
+		const docs = await Resource.find(
+			{ status: 'approved' },
+			{
+				title: 1,
+				description: 1,
+				summary: 1,
+				attribution: 1,
+				link: 1,
+				sitelink: 1,
+				resourceformat: 1,
+				contentcategory: 1,
+				createdAt: 1
+			}
+		)
+			.sort({ createdAt: -1 })
+			.limit(12)
+			.lean();
+		return {
+			defaultRecords: docs.map((doc) => ({
+				id: String(doc._id),
+				title: doc.title ?? undefined,
+				description: doc.description ?? undefined,
+				summary: doc.summary ?? undefined,
+				attribution: doc.attribution ?? undefined,
+				link: doc.link,
+				sitelink: doc.sitelink ?? undefined,
+				resourceformat: doc.resourceformat,
+				contentcategory: doc.contentcategory ?? undefined,
+				createdAt: doc.createdAt.toISOString()
+			}))
+		};
+	} catch (error) {
+		console.error('Could not load default records:', error);
+		return { defaultRecords: [] };
 	}
 };

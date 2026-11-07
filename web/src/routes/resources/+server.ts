@@ -17,7 +17,11 @@ const insertSchema = z.object({
 	attribution: z.string().nullish(),
 	resourceformat: z.literal('pdf'),
 	contentcategory: z.enum(RESOURCE_CATEGORIES).nullish(),
-	imgurl: z.string().nullish()
+	imgurl: z.string().nullish(),
+	// Submissions (/submit) request pending review; a client claiming 'approved'
+	// is rejected here, so approval stays a server-side decision. Omitted →
+	// approved (the /pdf curator tool saves directly).
+	status: z.literal('pending').optional()
 });
 
 // Schema invariants as insert-time rules (mirrors resource-schema.ts):
@@ -56,7 +60,8 @@ export const POST: RequestHandler = async ({ request }) => {
 			resourceformat: data.resourceformat,
 			contentcategory: data.contentcategory ?? null,
 			imgurl: data.imgurl ?? null,
-			status: 'approved', // everything is approved for now
+			// Curator saves default to approved; /submit requests pending review.
+			status: data.status === 'pending' ? 'pending' : 'approved',
 			createdAt: new Date()
 		});
 		return json(String(resource._id), { status: 201 });

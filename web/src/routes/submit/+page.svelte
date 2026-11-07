@@ -57,7 +57,8 @@
 			const saveRes = await fetch('/resources', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ ...meta, sitelink: siteLink.trim() || null })
+				// Public submissions go to the review queue, not straight to search.
+				body: JSON.stringify({ ...meta, sitelink: siteLink.trim() || null, status: 'pending' })
 			});
 			if (!saveRes.ok) {
 				const body = (await saveRes.json().catch(() => null)) as
