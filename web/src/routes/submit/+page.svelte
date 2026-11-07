@@ -38,12 +38,15 @@
 
 		if (errors.name || errors.email || errors.link || errors.siteLink || errors.description) return;
 
-		// PDF resources run through the pipeline: extract → AI-clean → insert.
-		// (Web-page resources don't fit the current `resourceformat: 'pdf'` schema.)
+		// Gutenberg ebooks go through their own pipeline; everything else is
+		// treated as a PDF document. Both share the AI-clean + gate + insert path.
+		const endpoint = /gutenberg/i.test(link.trim())
+			? 'api/book-metadata'
+			: 'api/pdf-metadata';
 		submitting = true;
 		apiError = '';
 		try {
-			const metaRes = await fetch('/api/pdf-metadata', {
+			const metaRes = await fetch('/' + endpoint, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ url: link.trim() })
@@ -181,7 +184,8 @@
 								aria-describedby={`link-help ${errors.link ? 'link-error' : ''}`}
 							/>
 							<p id="link-help" class="text-sm text-muted-foreground">
-								A direct link to a PDF document.
+								A direct link to a PDF document, or a Project Gutenberg ebook page
+								(https://www.gutenberg.org/ebooks/…).
 							</p>
 							{#if errors.link}
 								<p id="link-error" class="text-sm font-medium text-[#A84A42]">{errors.link}</p>

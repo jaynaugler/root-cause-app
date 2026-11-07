@@ -2,8 +2,13 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { z } from 'zod';
 import { getResourceModel } from '#lib/server/resources.js';
-import { RESOURCE_CATEGORIES } from '#lib/server/resource-schema.js';
-import { MAX_DESCRIPTION_LENGTH, MIN_SUMMARY_LENGTH } from '#lib/server/resource-schema.js';
+import {
+	RESOURCE_CATEGORIES,
+	RESOURCE_FORMATS,
+	truncateTeaser,
+	MAX_DESCRIPTION_LENGTH,
+	MIN_SUMMARY_LENGTH
+} from '#lib/server/resource-schema.js';
 
 // Shape of the POST /api/pdf-metadata record, minus `details`/`raw` (UI-only,
 // must not reach Mongo) and `status`/`createdAt` (stamped by this handler —
@@ -15,7 +20,7 @@ const insertSchema = z.object({
 	description: z.string().nullish(),
 	summary: z.string().nullish(),
 	attribution: z.string().nullish(),
-	resourceformat: z.literal('pdf'),
+	resourceformat: z.enum(RESOURCE_FORMATS),
 	contentcategory: z.enum(RESOURCE_CATEGORIES).nullish(),
 	imgurl: z.string().nullish(),
 	// Submissions (/submit) request pending review; a client claiming 'approved'
@@ -33,7 +38,7 @@ const insertSchema = z.object({
 function normalizeTexts(description: string | null, summary: string | null) {
 	if (description !== null && description.length > MAX_DESCRIPTION_LENGTH) {
 		const text = description;
-		return { description: text.slice(0, MAX_DESCRIPTION_LENGTH), summary: text.length >= MIN_SUMMARY_LENGTH ? text : null };
+		return { description: truncateTeaser(text), summary: text.length >= MIN_SUMMARY_LENGTH ? text : null };
 	}
 	if (summary !== null && summary.length < MIN_SUMMARY_LENGTH) return { description, summary: null };
 	return { description, summary };

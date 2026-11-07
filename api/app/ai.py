@@ -42,21 +42,31 @@ SYSTEM_PROMPT = (
 USER_INSTRUCTIONS = f"""Clean the record below.
 
 Rules:
-- title: use the record's metadata title if it is any good; otherwise take the
-  document's heading or first meaningful line of the text, minus generic labels
-  like 'info sheet' or 'fact sheet'. null if neither exists.
+- title: the SHORT main title only. From the metadata title, drop everything
+  after a colon/semicolon that is a subtitle, series note, speech transcript
+  description or date qualifier — "Abolition Fanaticism in New York", not
+  "Abolition Fanaticism in New York: Speech of a Runaway Slave from Baltimore,
+  at an Abolition Meeting...". Keep a title's own quotation-marked or "Or,"
+  sections (they are the work's name). For records without a good metadata
+  title, take the document heading or first meaningful line of the text, minus
+  generic labels like 'info sheet'. null if neither exists.
 - description: at most 150 characters — the single most important line, with
   the key names and keywords a reader would associate with the document. This
-  is the card teaser; details go in the summary. No titles, no markdown.
+  is the card teaser; details go in the summary. Describe the work's CONTENT —
+  production metadata is never content: "E-text prepared by…", transcriber
+  notes, performance copyrights and hosting-site pages are the packaging, not
+  the work. No titles, no markdown.
 - summary: a full plain-text summary of the document, at least 250 characters
   (3 or more sentences). If the document is too short to support that, return
   null instead of padding. Repair
   line-breaks and obvious OCR letter errors, and drop watermark, credit-line,
   navigation and page-number junk. No titles, no markdown, no newlines.
-- attribution: the person or organization the resource comes from. Prefer the
-  document's own credit line — wording like "Source: X", "please credit: X",
-  "© X", "courtesy of X" — over the metadata author/creator, which may name
-  only the individual author. null if unknown.
+- attribution: the AUTHOR or originating organization of the resource — never
+  the hosting platform or distributor (e.g. Project Gutenberg is the
+  distributor of an ebook, not its author → attribute the book's author).
+  When the resource itself carries a credit line ("Source: X", "please
+  credit: X", "© X"), prefer that over metadata author/creator. null if
+  the author is genuinely unknown.
 - contentcategory: pick exactly one of: {", ".join(CATEGORIES)}.
 
 Record:

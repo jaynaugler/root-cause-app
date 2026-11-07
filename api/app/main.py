@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.book import router as book_router
 from app.config import get_allowed_origins
 from app.db import client, db
 from app.items import router as items_router
@@ -29,6 +30,7 @@ if origins := get_allowed_origins():
 		allow_headers=["*"],
 	)
 
+app.include_router(book_router, prefix="/api")
 app.include_router(items_router, prefix="/api")
 app.include_router(pdf_router, prefix="/api")
 
