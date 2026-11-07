@@ -13,6 +13,7 @@ dependencies = [
 	"httpx>=0.28.1",
 	"pillow>=13.0.0",
 	"pytesseract>=0.3.13",
+	"beanie>=2.2.0",
 ]
 
 [dependency-groups]
