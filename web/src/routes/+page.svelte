@@ -1,7 +1,4 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
-	import { Button } from '#lib/components/ui/button/index.js';
-	import * as Card from '#lib/components/ui/card/index.js';
 	import ResultsCard from '#lib/components/resultsCard/ResultsCard.svelte';
 
 	// Extract the 'form' prop to access action return data and failures
