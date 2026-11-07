@@ -2,12 +2,12 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { z } from 'zod';
 import { getResourceModel } from '#lib/server/resources.js';
-import { RESOURCE_CATEGORIES } from '#lib/server/resource-schema.js';
+import { RESOURCE_CATEGORIES, RESOURCE_FORMATS } from '#lib/server/resource-schema.js';
 import { MAX_DESCRIPTION_LENGTH, MIN_SUMMARY_LENGTH } from '#lib/server/resource-schema.js';
 
 // Shape of the POST /api/pdf-metadata record, minus `details`/`raw` (UI-only,
 // must not reach Mongo) and `status`/`createdAt` (stamped by this handler —
-// a client never chooses its own approval status).
+// clients may request 'pending', never self-approve).
 const insertSchema = z.object({
 	title: z.string().nullish(),
 	link: z.string(),
@@ -15,9 +15,13 @@ const insertSchema = z.object({
 	description: z.string().nullish(),
 	summary: z.string().nullish(),
 	attribution: z.string().nullish(),
-	resourceformat: z.literal('pdf'),
+	resourceformat: z.enum(RESOURCE_FORMATS),
 	contentcategory: z.enum(RESOURCE_CATEGORIES).nullish(),
-	imgurl: z.string().nullish()
+	imgurl: z.string().nullish(),
+	// Submissions (/submit) request pending review; a client claiming 'approved'
+	// is rejected here, so approval stays a server-side decision. Omitted →
+	// approved (the /pdf curator tool saves directly).
+	status: z.literal('pending').optional()
 });
 
 // Schema invariants as insert-time rules (mirrors resource-schema.ts):
@@ -56,7 +60,8 @@ export const POST: RequestHandler = async ({ request }) => {
 			resourceformat: data.resourceformat,
 			contentcategory: data.contentcategory ?? null,
 			imgurl: data.imgurl ?? null,
-			status: 'approved', // everything is approved for now
+			// Curator saves default to approved; /submit requests pending review.
+			status: data.status === 'pending' ? 'pending' : 'approved',
 			createdAt: new Date()
 		});
 		return json(String(resource._id), { status: 201 });

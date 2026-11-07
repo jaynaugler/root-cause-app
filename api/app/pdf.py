@@ -24,6 +24,8 @@ logger = logging.getLogger("uvicorn.error")
 
 MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 DOWNLOAD_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
+# Sites (notably Wikipedia) 403 the default python httpx UA.
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"
 SUMMARY_PAGES = 3
 MAX_SUMMARY_CHARS = 2000
 MAX_FULL_TEXT_CHARS = 100_000  # sanity cap when pulling a short doc's full text
@@ -190,38 +192,42 @@ def _summarize(texts: list[str], cap: int) -> str | None:
 	return joined[:cap] or None
 
 
-@router.post("/pdf-metadata")
-async def pdf_metadata(payload: PdfUrlIn) -> dict:
-	async with _REQUEST_SLOTS:  # bounded queue; waiters hold only the URL
-		return await _run_pdf_metadata(payload)
-
-
-async def _run_pdf_metadata(payload: PdfUrlIn) -> dict:
-	# Download (streaming so the 10 MB cap holds even without a content-length)
+async def _download(payload_url: str) -> bytes:
+	"""Streamed download with the size cap (holds even without content-length)."""
 	chunks: list[bytes] = []
 	size = 0
 	try:
 		async with httpx.AsyncClient(
-			follow_redirects=True, timeout=DOWNLOAD_TIMEOUT
-		) as client, client.stream("GET", str(payload.url)) as resp:
+			follow_redirects=True, timeout=DOWNLOAD_TIMEOUT, headers={"user-agent": USER_AGENT}
+		) as client, client.stream("GET", payload_url) as resp:
 			if resp.status_code != 200:
 				raise HTTPException(
 					HTTPStatus.BAD_GATEWAY, f"Download failed with HTTP status {resp.status_code}."
 				)
 			declared = resp.headers.get("content-length")
 			if declared and int(declared) > MAX_BYTES:
-				raise HTTPException(HTTPStatus.CONTENT_TOO_LARGE, "PDF exceeds the 10 MB limit.")
+				raise HTTPException(HTTPStatus.CONTENT_TOO_LARGE, "The resource exceeds the 10 MB limit.")
 			async for chunk in resp.aiter_bytes():
 				size += len(chunk)
 				if size > MAX_BYTES:
-					raise HTTPException(HTTPStatus.CONTENT_TOO_LARGE, "PDF exceeds the 10 MB limit.")
+					raise HTTPException(HTTPStatus.CONTENT_TOO_LARGE, "The resource exceeds the 10 MB limit.")
 				chunks.append(chunk)
 	except httpx.TimeoutException:
-		raise HTTPException(HTTPStatus.GATEWAY_TIMEOUT, "Timed out downloading the PDF.")
+		raise HTTPException(HTTPStatus.GATEWAY_TIMEOUT, "Timed out downloading the resource.")
 	except httpx.HTTPError:
 		raise HTTPException(HTTPStatus.BAD_GATEWAY, "Could not download a file from that URL.")
-	data = b"".join(chunks)
+	return b"".join(chunks)
 
+
+@router.post("/pdf-metadata")
+async def pdf_metadata(payload: PdfUrlIn) -> dict:
+	async with _REQUEST_SLOTS:  # bounded queue; waiters hold only the URL
+		return await _record_from_pdf(await _download(str(payload.url)), str(payload.url))
+
+
+async def _record_from_pdf(data: bytes, link: str) -> dict:
+	"""PDF bytes → cleaned resource record (shared by /pdf-metadata and the
+	/resource-metadata dispatcher)."""
 	# Sanity check: many hosts serve PDFs as application/octet-stream, so the
 	# magic bytes are a more reliable gate than the content-type header.
 	if not data.startswith(b"%PDF-"):
@@ -265,7 +271,7 @@ async def _run_pdf_metadata(payload: PdfUrlIn) -> dict:
 
 	record = {
 		"title": _ser(title) or None,
-		"link": str(payload.url),
+		"link": link,
 		"sitelink": None,  # the site hosting this resource — curator fills it in
 		"description": _summarize(
 			_extract_text(reader, full=short_doc, data=data),

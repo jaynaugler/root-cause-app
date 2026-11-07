@@ -17,6 +17,9 @@ export const RESOURCE_CATEGORIES = [
 // 'unapproved' is unused today: everything is inserted 'approved' for now.
 export const RESOURCE_STATUSES = ['pending', 'approved', 'unapproved'] as const;
 
+// Formats the fetch pipeline produces (api/app/pdf.py and api/app/resource.py).
+export const RESOURCE_FORMATS = ['pdf', 'article'] as const;
+
 // Shared length rules (enforced by the Mongoose schema, the DB validator, and
 // the insert flow's description→summary fallback slice).
 export const MAX_DESCRIPTION_LENGTH = 150;
@@ -32,7 +35,7 @@ export interface ResourceDoc {
 	description: string | null; // ≤150 chars, card teaser
 	summary: string | null; // ≥250 chars, full cleaned summary (search data)
 	attribution: string | null;
-	resourceformat: string; // enum: ['pdf']
+	resourceformat: (typeof RESOURCE_FORMATS)[number]; // 'pdf' | 'article'
 	contentcategory: ResourceCategory | null;
 	imgurl: string | null;
 	status: ResourceStatus;
@@ -52,7 +55,7 @@ export const resourceSchema = new mongoose.Schema<ResourceDoc>(
 		// minlength runs only on real strings — `null` (fallback records) stays legal.
 		summary: { type: String, default: null, minlength: MIN_SUMMARY_LENGTH },
 		attribution: { type: String, default: null },
-		resourceformat: { type: String, required: true, enum: ['pdf'] },
+		resourceformat: { type: String, required: true, enum: [...RESOURCE_FORMATS] },
 		contentcategory: { type: String, enum: [...RESOURCE_CATEGORIES], default: null },
 		imgurl: { type: String, default: null },
 		status: { type: String, required: true, enum: [...RESOURCE_STATUSES] },

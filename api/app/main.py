@@ -7,6 +7,7 @@ from app.config import get_allowed_origins
 from app.db import client, db
 from app.items import router as items_router
 from app.pdf import router as pdf_router
+from app.resource import router as resource_router
 
 
 @asynccontextmanager
@@ -31,6 +32,7 @@ if origins := get_allowed_origins():
 
 app.include_router(items_router, prefix="/api")
 app.include_router(pdf_router, prefix="/api")
+app.include_router(resource_router, prefix="/api")
 
 
 @app.get("/health")

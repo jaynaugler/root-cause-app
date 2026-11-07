@@ -38,12 +38,12 @@
 
 		if (errors.name || errors.email || errors.link || errors.siteLink || errors.description) return;
 
-		// PDF resources run through the pipeline: extract → AI-clean → insert.
-		// (Web-page resources don't fit the current `resourceformat: 'pdf'` schema.)
+		// Resources run through the pipeline: extract (PDF or article) →
+		// AI-clean → insert. The dispatcher handles both URL kinds.
 		submitting = true;
 		apiError = '';
 		try {
-			const metaRes = await fetch('/api/pdf-metadata', {
+			const metaRes = await fetch('/api/resource-metadata', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ url: link.trim() })
@@ -57,7 +57,8 @@
 			const saveRes = await fetch('/resources', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ ...meta, sitelink: siteLink.trim() || null })
+				// Public submissions go to the review queue, not straight to search.
+				body: JSON.stringify({ ...meta, sitelink: siteLink.trim() || null, status: 'pending' })
 			});
 			if (!saveRes.ok) {
 				const body = (await saveRes.json().catch(() => null)) as
@@ -180,7 +181,7 @@
 								aria-describedby={`link-help ${errors.link ? 'link-error' : ''}`}
 							/>
 							<p id="link-help" class="text-sm text-muted-foreground">
-								A direct link to a PDF document.
+								A direct link to a PDF document or a news article.
 							</p>
 							{#if errors.link}
 								<p id="link-error" class="text-sm font-medium text-[#A84A42]">{errors.link}</p>
