@@ -291,6 +291,11 @@ async def _run_pdf_metadata(payload: PdfUrlIn) -> dict:
 		},
 	}
 
+	# Debug aid: the pre-clean record, so callers can diff raw vs cleaned.
+	# The insert flow strips it exactly like `details`. Shallow copy is fine —
+	# only top-level fields are later overwritten.
+	record["raw"] = {k: v for k, v in record.items() if k != "raw"}
+
 	# Clean the record with Gemini. Failure of any kind — no key, bad model
 	# name, timeout, malformed reply — returns the raw record instead.
 	try:

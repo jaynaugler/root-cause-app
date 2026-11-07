@@ -25,6 +25,7 @@
 		imgurl: string | null;
 		status: string | null;
 		details: Details;
+		raw?: Omit<ResourceRecord, 'raw'>;
 	};
 
 	let url = $state('');
@@ -128,6 +129,26 @@
 							<dd>{value}</dd>
 						{/each}
 					</dl>
+
+					<!-- Debug: strip before Mongo insert, like `details` -->
+					<details class="mt-4">
+						<summary class="cursor-pointer text-sm font-medium">Cleaned record (API response)</summary>
+						<pre class="mt-2 max-h-96 overflow-auto rounded bg-muted p-3 text-xs">{JSON.stringify(
+							{ ...meta, raw: undefined },
+							null,
+							2
+						)}</pre>
+					</details>
+					{#if meta.raw}
+						<details class="mt-2">
+							<summary class="cursor-pointer text-sm font-medium">Original scrape (raw extractor output)</summary>
+							<pre class="mt-2 max-h-96 overflow-auto rounded bg-muted p-3 text-xs">{JSON.stringify(
+								meta.raw,
+								null,
+								2
+							)}</pre>
+						</details>
+					{/if}
 				</div>
 			{/if}
 		</Card.Content>

@@ -46,9 +46,10 @@ Rules:
 - description: 2 to 4 plain-text sentences summarizing the text. Repair OCR
   line-breaks and obvious OCR letter errors, and drop watermark, credit-line,
   navigation and page-number junk. No titles, no markdown, no newlines.
-- attribution: the person or organization the resource comes from — prefer a
-  stated source/credit line in the text, then the metadata author/creator.
-  null if unknown.
+- attribution: the person or organization the resource comes from. Prefer the
+  document's own credit line — wording like "Source: X", "please credit: X",
+  "© X", "courtesy of X" — over the metadata author/creator, which may name
+  only the individual author. null if unknown.
 - contentcategory: pick exactly one of: {", ".join(CATEGORIES)}.
 
 Record:
