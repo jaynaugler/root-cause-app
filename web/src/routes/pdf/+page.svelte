@@ -4,7 +4,7 @@
 	import * as Card from '#lib/components/ui/card/index.js';
 
 	// Mirrors the response of POST /api/pdf-metadata (api/app/pdf.py) —
-	// the shape of the eventual `resources` record, plus extraction details.
+	// the shape of the eventual `resources` record (details are UI-only).
 	type Details = {
 		author: string | null;
 		subject: string | null;
@@ -18,12 +18,15 @@
 	type ResourceRecord = {
 		title: string | null;
 		link: string;
+		description: string | null;
 		summary: string | null;
 		attribution: string | null;
 		resourceformat: string;
 		contentcategory: string | null;
 		imgurl: string | null;
+		status: string | null;
 		details: Details;
+		raw?: Omit<ResourceRecord, 'raw'>;
 	};
 
 	let url = $state('');
@@ -95,10 +98,13 @@
 						<p class="break-all text-xs text-muted-foreground">{meta.link}</p>
 					</div>
 
-					{#if meta.summary}
-						<p class="text-sm leading-relaxed">{meta.summary}</p>
+					{#if meta.description}
+						<p class="text-sm font-medium leading-relaxed">{meta.description}</p>
 					{:else}
 						<p class="text-sm text-muted-foreground">No text layer found (scanned PDF?).</p>
+					{/if}
+					{#if meta.summary}
+						<p class="text-sm leading-relaxed text-muted-foreground">{meta.summary}</p>
 					{/if}
 
 					<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
@@ -108,6 +114,8 @@
 						<dd>{meta.resourceformat}</dd>
 						<dt class="font-medium">Category</dt>
 						<dd>{meta.contentcategory ?? '—'}</dd>
+						<dt class="font-medium">Status</dt>
+						<dd>{meta.status ?? '—'}</dd>
 						<dt class="font-medium">Author</dt>
 						<dd>{meta.details.author ?? '—'}</dd>
 						<dt class="font-medium">Creator</dt>
@@ -125,6 +133,26 @@
 							<dd>{value}</dd>
 						{/each}
 					</dl>
+
+					<!-- Debug: strip before Mongo insert, like `details` -->
+					<details class="mt-4">
+						<summary class="cursor-pointer text-sm font-medium">Cleaned record (API response)</summary>
+						<pre class="mt-2 max-h-96 overflow-auto rounded bg-muted p-3 text-xs">{JSON.stringify(
+							{ ...meta, raw: undefined },
+							null,
+							2
+						)}</pre>
+					</details>
+					{#if meta.raw}
+						<details class="mt-2">
+							<summary class="cursor-pointer text-sm font-medium">Original scrape (raw extractor output)</summary>
+							<pre class="mt-2 max-h-96 overflow-auto rounded bg-muted p-3 text-xs">{JSON.stringify(
+								meta.raw,
+								null,
+								2
+							)}</pre>
+						</details>
+					{/if}
 				</div>
 			{/if}
 		</Card.Content>

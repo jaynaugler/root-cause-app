@@ -27,6 +27,12 @@ class Settings(BaseSettings):
 	mongodb_db: str = ""
 	allowed_origins: str = ""  # comma-separated origins allowed to call the API directly (browser CORS)
 
+	# Google AI Studio (api/app/ai.py cleans fetched PDF records). No key set
+	# means the PDF flow returns raw records instead of cleaned ones.
+	gemini_api_key: str = ""
+	gemini_model: str = "gemini-3.8-flash"
+	gemini_timeout: float = 30.0
+
 
 def get_allowed_origins() -> list[str]:
 	"""Parse ALLOWED_ORIGINS into a list; empty means 'same-origin / proxy only'."""

@@ -1,6 +1,7 @@
-"""Download a PDF by URL and return a resource record: extractable summary,
+"""Download a PDF by URL and return a resource record: extracted description,
 title, attribution, plus detailed document metadata. No persistence."""
 
+import asyncio
 import logging
 import shutil
 from datetime import datetime
@@ -8,20 +9,39 @@ from http import HTTPStatus
 from io import BytesIO
 
 import httpx
+import pypdfium2 as pdfium
 import pytesseract
 from fastapi import APIRouter, HTTPException
-from PIL import ImageOps
+from PIL import Image, ImageOps
 from pydantic import BaseModel, HttpUrl
-from pypdf import PageObject, PdfReader
+from pypdf import PdfReader
 from pypdf.errors import PdfReadError, PyPdfError
 
+from app.ai import clean_record
+
 router = APIRouter(tags=["pdf"])
+logger = logging.getLogger("uvicorn.error")
 
 MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 DOWNLOAD_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
 SUMMARY_PAGES = 3
 MAX_SUMMARY_CHARS = 2000
 MAX_FULL_TEXT_CHARS = 100_000  # sanity cap when pulling a short doc's full text
+# OCR quality: images at low DPI (e.g. a full page flattened at 72 dpi, 612px)
+# read poorly — upscale to ~2400px on the long side, and drop words tesseract
+# isn't sure about (it will guess pseudo-words out of decorative textures).
+TARGET_LONG_SIDE = 2400
+OCR_DPI = 300
+MIN_WORD_CONF = 60.0
+# OCR pages whose text layer covers less than this fraction of the page — a
+# scan with only a short watermark line (or nothing) falls below, a real text
+# layer covers most of the page. Char count is not a good gate: watermarks can
+# be long (bccns footers are ~185 chars), which a count of 40 would pass.
+MIN_TEXT_AREA_RATIO = 0.15
+# Cap concurrent /pdf-metadata handlers (512 MB container): each holds ~10 MB of
+# file bytes during download and ~100+ MB of render/OCR state during extraction.
+MAX_CONCURRENT_REQUESTS = 2
+_REQUEST_SLOTS = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 # Metadata keys we shape into top-level response fields (compared lowercased).
 KNOWN_FIELDS = {"title", "author", "subject", "creator", "producer", "creationdate", "moddate"}
@@ -39,77 +59,130 @@ def _ser(value) -> str | None:
 	return str(value)
 
 
-def _extract_text(reader: PdfReader, full: bool) -> list[str]:
-	"""Text from the first few pages — the text layer, plus OCR of embedded
-	images (scanned pages bury their real text in images, e.g. bccns PDFs).
-	`full`: pull every page (single-page docs), not just the first few."""
+def _text_layer_is_spare(document: pdfium.PdfDocument, index: int) -> bool:
+	"""True when this page's text layer covers only a small fraction of the page
+	(image-only, or a scan leaving just a watermark in the text layer)."""
+	page = None
+	textpage = None
+	try:
+		page = document[index]
+		textpage = page.get_textpage()
+		char_count = textpage.count_chars()
+		if char_count <= 0:
+			return True
+		ink = 0.0
+		for i in range(char_count):
+			left, bottom, right, top = textpage.get_charbox(i, loose=False)
+			ink += max(0.0, right - left) * max(0.0, top - bottom)
+		width, height = page.get_size()
+		return ink < MIN_TEXT_AREA_RATIO * width * height
+	except pdfium.PdfiumError:
+		return True
+	finally:
+		if textpage is not None:
+			textpage.close()
+		if page is not None:
+			page.close()
+
+
+def _extract_text(reader: PdfReader, full: bool, data: bytes) -> list[str]:
+	"""Text from the first few pages, using OCR for image-only pages and pages
+	with only a spare text layer (e.g. a watermark on a scan). `full`: pull every
+	page (single-page docs), not just the first few."""
 	texts: list[str] = []
-	# Degrad gracefully to text-layer-only when tesseract isn't installed.
+	# Degrade gracefully to text-layer-only when tesseract isn't installed.
 	ocr_ready = shutil.which("tesseract") is not None
+	document = None
+	if ocr_ready:
+		try:
+			document = pdfium.PdfDocument(data)
+		except pdfium.PdfiumError:
+			pass
 	cap = MAX_FULL_TEXT_CHARS if full else MAX_SUMMARY_CHARS
 	try:
 		pages = reader.pages if full else reader.pages[:SUMMARY_PAGES]
-		for page in pages:
-			parts = [page.extract_text() or ""]
-			if ocr_ready:
-				parts.append(_ocr_embedded_images(page, cap))
-			texts.append(" ".join(p for p in parts if p))
+		for index, page in enumerate(pages):
+			text = page.extract_text() or ""
+			if document is not None and _text_layer_is_spare(document, index):
+				text = _ocr_page(document, index) or text
+			texts.append(text)
 			if sum(len(t) for t in texts) > cap:
 				break
 	except PyPdfError:
 		pass  # unreadable/odd page content just means no summary
+	finally:
+		if document is not None:
+			document.close()
 	return texts
 
 
-def _ocr_embedded_images(page: PageObject, cap: int) -> str:
-	out: list[str] = []
+def _ocr_page(document: pdfium.PdfDocument, index: int) -> str:
+	"""Render the complete page so OCR sees the same orientation and composition
+	as a reader, including placed images, cropping, and page rotation. Rendered
+	grayscale directly — a third of the bitmap memory, and tesseract runs on
+	grayscale anyway."""
+	page = None
+	bitmap = None
+	image = None
 	try:
-		images = list(page.images)
-	except PyPdfError:
+		page = document[index]
+		scale = min(OCR_DPI / 72, TARGET_LONG_SIDE / max(page.get_size()))
+		bitmap = page.render(scale=scale, grayscale=True)
+		image = bitmap.to_pil()
+		return _ocr(image)
+	except pdfium.PdfiumError:
 		return ""
-	for image in images:
-		text = None
-		try:
-			text = _ocr(image.image)
-		except Exception as exc:  # noqa: BLE001 — an unreadable image just yields no text
-			logging.getLogger(__name__).warning("OCR failed for an embedded image: %s", exc)
-		if text:
-			out.append(text)
-		if sum(len(t) for t in out) > cap:
-			break
-	return " ".join(out)
+	finally:
+		if image is not None:
+			image.close()
+		if bitmap is not None:
+			bitmap.close()
+		if page is not None:
+			page.close()
 
 
 def _ocr(image) -> str:
-	"""OCR one image, retrying flipped/rotated placements when the first read
-	scores poorly — pypdf extracts raw XObject bytes without the PDF's
-	placement transform, so image content can come out mirrored."""
+	"""OCR one rendered page, trying each quarter-turn when the first read
+	scores poorly. Contrast normalization helps faint scans; the render already
+	arrives grayscale (mode L)."""
+	image = ImageOps.autocontrast(image)
+	long_side = max(image.width, image.height)
+	if long_side < TARGET_LONG_SIDE:
+		scale = max(1, min(4, round(TARGET_LONG_SIDE / long_side)))
+		image = image.resize((image.width * scale, image.height * scale), Image.Resampling.LANCZOS)
 	best, best_conf = "", -1.0
-	placements = (
-		image,
-		image.rotate(180),
-		ImageOps.mirror(image),
-		ImageOps.flip(image),
-	)
-	for img in placements:
-		text = pytesseract.image_to_string(img).strip()
-		if not text:
-			continue
-		confidence = _mean_word_confidence(img)
-		if confidence > best_conf:
-			best, best_conf = text, confidence
-		if best_conf >= 80:  # clearly readable; no further placements needed
-			break
+	for angle in (0, 90, 180, 270):
+		rotated = image if angle == 0 else image.rotate(angle, expand=True)
+		try:
+			text, confidence = _read(rotated)
+			if not text:
+				continue
+			if confidence > best_conf:
+				best, best_conf = text, confidence
+			if best_conf >= 80:  # clearly readable; no further rotations needed
+				break
+		finally:
+			if rotated is not image:
+				rotated.close()
 	return best
 
 
-def _mean_word_confidence(image) -> float:
+def _read(image) -> tuple[str, float]:
+	"""One OCR pass → (cleaned text, mean word confidence). Low-confidence
+	words are dropped from the text; the mean over all real words still drives
+	rotation selection."""
 	try:
 		data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
 	except pytesseract.TesseractError:
-		return -1.0
-	confs = [float(c) for c in data["conf"] if float(c) >= 0]
-	return sum(confs) / len(confs) if confs else -1.0
+		return "", -1.0
+	words = [
+		(w, float(c)) for w, c in zip(data["text"], data["conf"]) if w.strip() and float(c) >= 0
+	]
+	if not words:
+		return "", -1.0
+	mean_conf = sum(c for _, c in words) / len(words)
+	text = " ".join(w for w, c in words if c >= MIN_WORD_CONF).strip()
+	return text, mean_conf
 
 
 def _summarize(texts: list[str], cap: int) -> str | None:
@@ -119,6 +192,11 @@ def _summarize(texts: list[str], cap: int) -> str | None:
 
 @router.post("/pdf-metadata")
 async def pdf_metadata(payload: PdfUrlIn) -> dict:
+	async with _REQUEST_SLOTS:  # bounded queue; waiters hold only the URL
+		return await _run_pdf_metadata(payload)
+
+
+async def _run_pdf_metadata(payload: PdfUrlIn) -> dict:
 	# Download (streaming so the 10 MB cap holds even without a content-length)
 	chunks: list[bytes] = []
 	size = 0
@@ -185,17 +263,19 @@ async def pdf_metadata(payload: PdfUrlIn) -> dict:
 	# instead of the capped first-pages summary.
 	short_doc = page_count <= 1
 
-	return {
+	record = {
 		"title": _ser(title) or None,
 		"link": str(payload.url),
-		"summary": _summarize(
-			_extract_text(reader, full=short_doc),
+		"description": _summarize(
+			_extract_text(reader, full=short_doc, data=data),
 			MAX_FULL_TEXT_CHARS if short_doc else MAX_SUMMARY_CHARS,
 		),
+		"summary": None,  # full cleaned summary — filled by the Gemini cleanup
 		"attribution": _ser(raw.get("/Author")) or _ser(raw.get("/Creator")) or None,
 		"resourceformat": "pdf",
-		"contentcategory": None,  # classification comes later
+		"contentcategory": None,  # filled by the Gemini cleanup
 		"imgurl": None,  # cover-image extraction comes later
+		"status": None,  # stamped by the submit/approval flow at Mongo insert
 		"details": {
 			"author": _ser(raw.get("/Author")),
 			"subject": _ser(raw.get("/Subject")),
@@ -211,3 +291,29 @@ async def pdf_metadata(payload: PdfUrlIn) -> dict:
 			},
 		},
 	}
+
+	# Debug aid: the pre-clean record, so callers can diff raw vs cleaned.
+	# The insert flow strips it exactly like `details`. Shallow copy is fine —
+	# only top-level fields are later overwritten.
+	record["raw"] = {k: v for k, v in record.items() if k != "raw"}
+
+	# Clean the record with Gemini. Failure of any kind — no key, bad model
+	# name, timeout, malformed reply — returns the raw record instead.
+	try:
+		cleaned = await clean_record(
+			{
+				"title": record["title"],
+				"attribution": record["attribution"],
+				"author": _ser(raw.get("/Author")),
+				"creator": _ser(raw.get("/Creator")),
+				"subject": _ser(raw.get("/Subject")),
+				"text": record["description"],
+			}
+		)
+	except Exception as exc:  # noqa: BLE001 — cleanup must never kill the fetch
+		logger.warning("Gemini cleanup failed, returning the raw record: %s", exc)
+		return record
+
+	# Only overwrite with non-null cleaned values, so an unsure model never
+	# erases data that came straight out of the document.
+	return {**record, **{k: v for k, v in cleaned.items() if v is not None}}
