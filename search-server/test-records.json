@@ -1,0 +1,32 @@
+[
+  {
+    "id": 1,
+    "title": "No. 2 Construction Battalion",
+    "description": "Records of the Black battalion formed in Pictou, Nova Scotia in 1916 during the First World War.",
+    "institution": "Library and Archives Canada"
+  },
+  {
+    "id": 2,
+    "title": "Africville community collection",
+    "description": "Photographs and oral histories of the Black community in Halifax that was demolished in the 1960s.",
+    "institution": "Halifax Municipal Archives"
+  },
+  {
+    "id": 3,
+    "title": "Viola Desmond",
+    "description": "Documents about the businesswoman who challenged racial segregation at a New Glasgow theatre in 1946.",
+    "institution": "Nova Scotia Archives"
+  },
+  {
+    "id": 4,
+    "title": "Les Loyalistes noirs de Birchtown",
+    "description": "Documents sur les Loyalistes noirs installés à Birchtown, en Nouvelle-Écosse, après 1783.",
+    "institution": "Black Loyalist Heritage Centre"
+  },
+  {
+    "id": 5,
+    "title": "Musique gospel en Nouvelle-Écosse",
+    "description": "Enregistrements de chorales d'églises baptistes noires de la province.",
+    "institution": "Black Cultural Centre for Nova Scotia"
+  }
+]

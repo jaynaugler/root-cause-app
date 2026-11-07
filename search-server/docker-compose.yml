@@ -1,0 +1,57 @@
+name: search-hub
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    restart: unless-stopped
+
+  search-api:
+    build: ./search-api
+    environment:
+      - MEILI_URL=http://meilisearch:7700
+      - MEILI_SEARCH_KEY=${MEILI_SEARCH_KEY}
+      - API_KEY=${API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=gemini-3.5-flash-lite
+      - SUMMARY_PROVIDER=ollama
+    depends_on:
+      - meilisearch
+    restart: unless-stopped
+
+  meilisearch:
+    image: getmeili/meilisearch:latest
+    environment:
+      - MEILI_MASTER_KEY=${MEILI_MASTER_KEY}
+      - MEILI_ENV=production
+    volumes:
+      - meili_data:/meili_data
+    ports:
+      - "127.0.0.1:7700:7700"
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    restart: unless-stopped
+
+  sync:
+    build: ./sync
+    environment:
+      - ATLAS_URI=${ATLAS_URI}
+      - ATLAS_DB=${ATLAS_DB}
+      - ATLAS_COLLECTION=${ATLAS_COLLECTION}
+      - MEILI_URL=http://meilisearch:7700
+      - MEILI_SYNC_KEY=${MEILI_SYNC_KEY}
+      - APPROVED_ONLY=false
+    depends_on:
+      - meilisearch
+    restart: unless-stopped
+
+volumes:
+  meili_data:
+  ollama_data:
