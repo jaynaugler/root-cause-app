@@ -4,7 +4,7 @@
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import SearchSummary from '#lib/components/search/SearchSummary.svelte';
-	import ResultCard from '#lib/components/search/ResultCard.svelte';
+	import ResultsCard from '#lib/components/resultsCard/ResultsCard.svelte';
 	import MagicBorder from '#lib/components/search/MagicBorder.svelte';
 	import { MAX_HISTORY, type ThreadTurn } from '#lib/search.js';
 
@@ -123,12 +123,12 @@
 	{/if}
 {/snippet}
 
-<main class="container mx-auto max-w-3xl px-4 pt-12 space-y-8">
+<main class="container mx-auto max-w-6xl px-4 pt-12 space-y-8">
 	<header class="space-y-4">
 		<h1 class="text-2xl font-semibold">Search the archive</h1>
 
 		<!-- New search: starts a fresh thread -->
-		<form method="POST" action="?/search" class="space-y-2" use:enhance={submitTo('new')}>
+		<form method="POST" action="?/search" class="w-full space-y-2" use:enhance={submitTo('new')}>
 			<div class="flex gap-2">
 				<MagicBorder active={pending?.mode === 'new'} class="flex-1">
 					<Input
@@ -162,9 +162,9 @@
 				<summary class="cursor-pointer text-sm font-medium text-muted-foreground select-none">
 					{turn.results.length} record{turn.results.length === 1 ? '' : 's'} found
 				</summary>
-				<div class="mt-3 space-y-3">
+				<div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
 					{#each turn.results as result, i (result.id)}
-						<ResultCard {result} number={i + 1} anchorId="t{t}-result-{i + 1}" />
+						<ResultsCard {result} number={i + 1} anchorId="t{t}-result-{i + 1}" />
 					{/each}
 				</div>
 			</details>
