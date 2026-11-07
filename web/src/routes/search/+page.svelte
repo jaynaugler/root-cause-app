@@ -152,7 +152,7 @@
 		<article
 			id="turn-{t}"
 			class="scroll-mt-6 space-y-4 {isLatest && padLatestTurn ? FILL_SCREEN : ''}"
-		>
+		> 
 			<h2 class="text-lg font-medium">{turn.question}</h2>
 
 			<SearchSummary summary={turn.summary} provider={turn.provider} anchorPrefix="t{t}-result-" />

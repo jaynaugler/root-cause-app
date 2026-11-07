@@ -61,6 +61,6 @@
                 <span class="px-3">Go!</span>
                 <ArrowRightIcon class="mx-3 size-5 shrink-0" aria-hidden="true" />
             </Button>
-        {/if}
+        {/if} 
     </Card.Content>
 </Card.Root>

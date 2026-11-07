@@ -41,7 +41,7 @@ function parseHistory(raw: FormDataEntryValue | null): HistoryTurn[] {
 	} catch {
 		return [];
 	}
-}
+} 
 
 export const actions: Actions = {
 	search: async ({ request, fetch }) => {
