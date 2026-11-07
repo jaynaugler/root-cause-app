@@ -12,7 +12,7 @@
 	<link rel="icon" href={favicon} />
 </svelte:head>
 
-<div class="flex min-h-screen flex-col"> <!-- NEW -->
+  <div class="flex min-h-screen flex-col bg-[#FBF7F2]"><!-- NEW -->
 	<Header />
 
 	<div class="flex-1"> <!-- NEW -->
