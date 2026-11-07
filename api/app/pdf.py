@@ -29,7 +29,11 @@ MAX_FULL_TEXT_CHARS = 100_000  # sanity cap when pulling a short doc's full text
 TARGET_LONG_SIDE = 2400
 OCR_DPI = 300
 MIN_WORD_CONF = 60.0
-MIN_TEXT_LAYER_CHARS = 40
+# OCR pages whose text layer covers less than this fraction of the page — a
+# scan with only a short watermark line (or nothing) falls below, a real text
+# layer covers most of the page. Char count is not a good gate: watermarks can
+# be long (bccns footers are ~185 chars), which a count of 40 would pass.
+MIN_TEXT_AREA_RATIO = 0.15
 # Cap concurrent /pdf-metadata handlers (512 MB container): each holds ~10 MB of
 # file bytes during download and ~100+ MB of render/OCR state during extraction.
 MAX_CONCURRENT_REQUESTS = 2
@@ -51,9 +55,35 @@ def _ser(value) -> str | None:
 	return str(value)
 
 
+def _text_layer_is_spare(document: pdfium.PdfDocument, index: int) -> bool:
+	"""True when this page's text layer covers only a small fraction of the page
+	(image-only, or a scan leaving just a watermark in the text layer)."""
+	page = None
+	textpage = None
+	try:
+		page = document[index]
+		textpage = page.get_textpage()
+		char_count = textpage.count_chars()
+		if char_count <= 0:
+			return True
+		ink = 0.0
+		for i in range(char_count):
+			left, bottom, right, top = textpage.get_charbox(i, loose=False)
+			ink += max(0.0, right - left) * max(0.0, top - bottom)
+		width, height = page.get_size()
+		return ink < MIN_TEXT_AREA_RATIO * width * height
+	except pdfium.PdfiumError:
+		return True
+	finally:
+		if textpage is not None:
+			textpage.close()
+		if page is not None:
+			page.close()
+
+
 def _extract_text(reader: PdfReader, full: bool, data: bytes) -> list[str]:
 	"""Text from the first few pages, using OCR for image-only pages and pages
-	with only a small text layer (e.g. a watermark on a scan). `full`: pull every
+	with only a spare text layer (e.g. a watermark on a scan). `full`: pull every
 	page (single-page docs), not just the first few."""
 	texts: list[str] = []
 	# Degrade gracefully to text-layer-only when tesseract isn't installed.
@@ -69,7 +99,7 @@ def _extract_text(reader: PdfReader, full: bool, data: bytes) -> list[str]:
 		pages = reader.pages if full else reader.pages[:SUMMARY_PAGES]
 		for index, page in enumerate(pages):
 			text = page.extract_text() or ""
-			if document is not None and len(text.strip()) < MIN_TEXT_LAYER_CHARS:
+			if document is not None and _text_layer_is_spare(document, index):
 				text = _ocr_page(document, index) or text
 			texts.append(text)
 			if sum(len(t) for t in texts) > cap:
