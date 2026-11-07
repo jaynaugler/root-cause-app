@@ -9,6 +9,7 @@
 		"build": "vite build",
 		"preview": "vite preview",
 		"seed": "tsx src/scripts/seed.ts",
+		"db:setup": "tsx src/scripts/setup-resources.ts",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
@@ -44,6 +45,7 @@
 	},
 	"dependencies": {
 		"mongodb": "^7.8.0",
+		"mongoose": "^9.12.0",
 		"zod": "^4.6.7"
 	}
 }

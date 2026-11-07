@@ -11,6 +11,7 @@
 		"preview": "pnpm -C web preview",
 		"check": "pnpm -C web check",
 		"seed": "pnpm -C web seed",
+		"db:setup": "pnpm -C web db:setup",
 		"api:sync": "uv sync --project api"
 	}
 }
