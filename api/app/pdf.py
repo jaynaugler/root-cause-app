@@ -270,6 +270,7 @@ async def _run_pdf_metadata(payload: PdfUrlIn) -> dict:
 			_extract_text(reader, full=short_doc, data=data),
 			MAX_FULL_TEXT_CHARS if short_doc else MAX_SUMMARY_CHARS,
 		),
+		"summary": None,  # full cleaned summary — filled by the Gemini cleanup
 		"attribution": _ser(raw.get("/Author")) or _ser(raw.get("/Creator")) or None,
 		"resourceformat": "pdf",
 		"contentcategory": None,  # filled by the Gemini cleanup

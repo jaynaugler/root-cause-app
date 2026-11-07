@@ -22,7 +22,8 @@ logger = logging.getLogger("uvicorn.error")
 # Keep the prompt bounded — the model writes a short description, not a
 # transcript. (pdf.py caps the full text at 100k chars; this is the LLM input.)
 MAX_INPUT_CHARS = 48_000
-MAX_DESCRIPTION_CHARS = 2000  # same cap as the search-api answers
+MAX_DESCRIPTION_CHARS = 150  # card teaser, one punchy line
+MAX_SUMMARY_CHARS = 2000  # full cleaned summary (search data)
 
 # Archive vocabulary for contentcategory. Only these pass validation.
 CATEGORIES = ["people", "places", "events", "organizations", "publications", "history"]
@@ -43,7 +44,10 @@ Rules:
 - title: use the record's metadata title if it is any good; otherwise take the
   document's heading or first meaningful line of the text, minus generic labels
   like 'info sheet' or 'fact sheet'. null if neither exists.
-- description: 2 to 4 plain-text sentences summarizing the text. Repair OCR
+- description: at most 150 characters — the single most important line, with
+  the key names and keywords a reader would associate with the document. This
+  is the card teaser; details go in the summary. No titles, no markdown.
+- summary: a full 3 to 6 sentence plain-text summary of the document. Repair
   line-breaks and obvious OCR letter errors, and drop watermark, credit-line,
   navigation and page-number junk. No titles, no markdown, no newlines.
 - attribution: the person or organization the resource comes from. Prefer the
@@ -61,6 +65,7 @@ RESPONSE_SCHEMA = {
 	"properties": {
 		"title": {"type": "STRING", "nullable": True},
 		"description": {"type": "STRING", "nullable": True},
+		"summary": {"type": "STRING", "nullable": True},
 		"attribution": {"type": "STRING", "nullable": True},
 		"contentcategory": {"type": "STRING", "enum": CATEGORIES},
 	},
@@ -158,18 +163,18 @@ def _normalize(text: str) -> str:
 	return " ".join(re.findall(r"[a-z0-9]+", text.casefold()))
 
 
-def _optional(value) -> str | None:
+def _optional(value, cap: int = MAX_SUMMARY_CHARS) -> str | None:
 	"""Whitespace-trim a model string; empty or non-string becomes None."""
 	if not isinstance(value, str):
 		return None
 	value = value.strip()
-	return value[:MAX_DESCRIPTION_CHARS] if value else None
+	return value[:cap] if value else None
 
 
 def _claims_problems(cleaned: dict, given_text: str) -> list[str]:
 	"""Gate every model-authored free-text field against what the model received."""
 	problems: list[str] = []
-	for field in ("title", "description", "attribution"):
+	for field in ("title", "description", "summary", "attribution"):
 		problems += _unsupported_phrases(_optional(cleaned.get(field)), given_text)
 	return problems
 
@@ -193,9 +198,10 @@ async def _generate(payload: dict) -> dict:
 
 
 async def clean_record(fields: dict) -> dict:
-	"""Cleaned {title, description, attribution, contentcategory}. Raises on
-	anything unusable (no key, HTTP error, malformed reply, unsupported claims
-	surviving the retry) so the caller can fall back to the raw record."""
+	"""Cleaned {title, description, summary, attribution, contentcategory}.
+	Raises on anything unusable (no key, HTTP error, malformed reply,
+	unsupported claims surviving the retry) so the caller can fall back to
+	the raw record."""
 	if not settings.gemini_api_key:
 		raise RuntimeError("GEMINI_API_KEY is not set")
 
@@ -246,7 +252,8 @@ async def clean_record(fields: dict) -> dict:
 
 	return {
 		"title": _optional(cleaned.get("title")),
-		"description": _optional(cleaned.get("description")),
+		"description": _optional(cleaned.get("description"), MAX_DESCRIPTION_CHARS),
+		"summary": _optional(cleaned.get("summary")),
 		"attribution": _optional(cleaned.get("attribution")),
 		# Anything outside the vocabulary would be invention: map it to None.
 		"contentcategory": cleaned.get("contentcategory")

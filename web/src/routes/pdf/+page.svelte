@@ -19,6 +19,7 @@
 		title: string | null;
 		link: string;
 		description: string | null;
+		summary: string | null;
 		attribution: string | null;
 		resourceformat: string;
 		contentcategory: string | null;
@@ -98,9 +99,12 @@
 					</div>
 
 					{#if meta.description}
-						<p class="text-sm leading-relaxed">{meta.description}</p>
+						<p class="text-sm font-medium leading-relaxed">{meta.description}</p>
 					{:else}
 						<p class="text-sm text-muted-foreground">No text layer found (scanned PDF?).</p>
+					{/if}
+					{#if meta.summary}
+						<p class="text-sm leading-relaxed text-muted-foreground">{meta.summary}</p>
 					{/if}
 
 					<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
