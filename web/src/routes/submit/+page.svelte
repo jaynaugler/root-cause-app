@@ -7,42 +7,81 @@
 
 	let name = $state('');
 	let email = $state('');
+	// The actual resource (a direct link to a PDF)
 	let link = $state('');
+	// Optional: the page hosting the resource (e.g. https://bccns.com/resources/)
+	let siteLink = $state('');
 	let description = $state('');
 	let files: FileList | undefined = $state();
 
-	let errors = $state({ name: '', email: '', link: '', description: '' });
+	let errors = $state({ name: '', email: '', link: '', siteLink: '', description: '' });
 	let sent = $state(false);
+	let submitting = $state(false);
+	let apiError = $state('');
 
 	const MAX_DESCRIPTION = 500;
+	const URL_PATTERN = /^https?:\/\/\S+$/;
 
-	// The name of the chosen document, or empty if none
+	// The name of the chosen image, or empty if none
 	let fileName = $derived(files && files.length > 0 ? files[0].name : '');
 
-	function handleSubmit(event: SubmitEvent) {
+	async function handleSubmit(event: SubmitEvent) {
 		event.preventDefault();
 
 		errors = {
 			name: name.trim() ? '' : 'Enter your name.',
 			email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) ? '' : 'Enter a valid email, like name@example.com',
-			link: /^https?:\/\/\S+$/.test(link.trim()) ? '' : 'Enter a full link, starting with https://',
+			link: URL_PATTERN.test(link.trim()) ? '' : 'Enter a full link, starting with https://',
+			siteLink: !siteLink.trim() || URL_PATTERN.test(siteLink.trim()) ? '' : 'Enter a full site link, starting with https://',
 			description: description.trim() ? '' : 'Describe what this link is.'
 		};
 
-		if (errors.name || errors.email || errors.link || errors.description) return;
+		if (errors.name || errors.email || errors.link || errors.siteLink || errors.description) return;
 
-		// TEMPORARY: nothing is saved yet.
-		// The team will send this to the database later, as a "pending" request.
-		sent = true;
+		// PDF resources run through the pipeline: extract → AI-clean → insert.
+		// (Web-page resources don't fit the current `resourceformat: 'pdf'` schema.)
+		submitting = true;
+		apiError = '';
+		try {
+			const metaRes = await fetch('/api/pdf-metadata', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ url: link.trim() })
+			});
+			const meta = await metaRes.json().catch(() => null);
+			if (!metaRes.ok) {
+				const detail = (meta as { detail?: string } | null)?.detail;
+				throw new Error(detail ?? `Could not read that PDF (status ${metaRes.status}).`);
+			}
+
+			const saveRes = await fetch('/resources', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ ...meta, sitelink: siteLink.trim() || null })
+			});
+			if (!saveRes.ok) {
+				const body = (await saveRes.json().catch(() => null)) as
+					| { error?: string; issues?: unknown[] }
+					| null;
+				throw new Error(body?.error ?? `Saving failed (status ${saveRes.status}).`);
+			}
+			sent = true;
+		} catch (error) {
+			apiError = error instanceof Error ? error.message : 'Something went wrong — try again.';
+		} finally {
+			submitting = false;
+		}
 	}
 
 	function sendAnother() {
 		name = '';
 		email = '';
 		link = '';
+		siteLink = '';
 		description = '';
 		files = undefined;
 		sent = false;
+		apiError = '';
 	}
 </script>
 
@@ -89,7 +128,7 @@
 			{:else}
 				<Card.Header>
 					<Card.Title class="text-2xl">Submit a request</Card.Title>
-					<Card.Description>Document upload is optional. Everything else is required.</Card.Description>
+					<Card.Description>Image upload is optional. Everything else is required.</Card.Description>
 				</Card.Header>
 
 				<Card.Content>
@@ -127,21 +166,45 @@
 							{/if}
 						</div>
 
-						<!-- Link -->
+						<!-- Resource link (the actual document) -->
 						<div class="space-y-2">
-							<Label for="link">Link</Label>
+							<Label for="link">Resource link</Label>
 							<Input
 								id="link"
 								name="link"
 								type="url"
 								inputmode="url"
-								placeholder="https://"
+								placeholder="Direct link to the PDF, e.g. https://bccns.com/download/2468/"
 								bind:value={link}
 								aria-invalid={errors.link ? 'true' : undefined}
-								aria-describedby={errors.link ? 'link-error' : undefined}
+								aria-describedby={`link-help ${errors.link ? 'link-error' : ''}`}
 							/>
+							<p id="link-help" class="text-sm text-muted-foreground">
+								A direct link to a PDF document.
+							</p>
 							{#if errors.link}
 								<p id="link-error" class="text-sm font-medium text-[#A84A42]">{errors.link}</p>
+							{/if}
+						</div>
+
+						<!-- Site link (where it lives) — optional -->
+						<div class="space-y-2">
+							<Label for="sitelink">Site link <span class="text-muted-foreground">(optional)</span></Label>
+							<Input
+								id="sitelink"
+								name="sitelink"
+								type="url"
+								inputmode="url"
+								placeholder="e.g. https://bccns.com/resources/"
+								bind:value={siteLink}
+								aria-invalid={errors.siteLink ? 'true' : undefined}
+								aria-describedby={`sitelink-help ${errors.siteLink ? 'sitelink-error' : ''}`}
+							/>
+							<p id="sitelink-help" class="text-sm text-muted-foreground">
+								The page the resource lives on, if it has one.
+							</p>
+							{#if errors.siteLink}
+								<p id="sitelink-error" class="text-sm font-medium text-[#A84A42]">{errors.siteLink}</p>
 							{/if}
 						</div>
 
@@ -175,28 +238,32 @@
 						<div class="flex flex-wrap items-center justify-between gap-3 pt-2">
 							<div class="flex min-w-0 items-center gap-3">
 								<label
-									for="document"
+									for="image"
 									class="inline-flex h-9 cursor-pointer items-center rounded-md border border-[#3F6B41] px-4 text-sm font-medium text-[#3F6B41] hover:bg-[#3F6B41]/10 focus-within:ring-[3px] focus-within:ring-ring/50"
 								>
-									Upload document
+									Upload image
 									<input
-										id="document"
-										name="document"
+										id="image"
+										name="image"
 										type="file"
-										accept=".pdf"
+										accept="image/*"
 										class="sr-only"
 										bind:files
 									/>
 								</label>
 								<span class="truncate text-sm text-muted-foreground">
-									{fileName || 'PDF, optional'}
+									{fileName || 'Image, optional'}
 								</span>
 							</div>
 
-							<Button type="submit" class="bg-[#3F6B41] px-8 text-white hover:bg-[#335A35]">
-								Submit
+							<Button type="submit" disabled={submitting} class="bg-[#3F6B41] px-8 text-white hover:bg-[#335A35]">
+								{submitting ? 'Submitting…' : 'Submit'}
 							</Button>
 						</div>
+
+						{#if apiError}
+							<p class="text-sm font-medium text-[#A84A42]" role="alert">{apiError}</p>
+						{/if}
 					</form>
 				</Card.Content>
 			{/if}
