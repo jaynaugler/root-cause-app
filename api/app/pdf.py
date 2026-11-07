@@ -1,6 +1,7 @@
 """Download a PDF by URL and return a resource record: extractable summary,
 title, attribution, plus detailed document metadata. No persistence."""
 
+import asyncio
 import shutil
 from datetime import datetime
 from http import HTTPStatus
@@ -29,6 +30,10 @@ TARGET_LONG_SIDE = 2400
 OCR_DPI = 300
 MIN_WORD_CONF = 60.0
 MIN_TEXT_LAYER_CHARS = 40
+# Cap concurrent /pdf-metadata handlers (512 MB container): each holds ~10 MB of
+# file bytes during download and ~100+ MB of render/OCR state during extraction.
+MAX_CONCURRENT_REQUESTS = 2
+_REQUEST_SLOTS = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 # Metadata keys we shape into top-level response fields (compared lowercased).
 KNOWN_FIELDS = {"title", "author", "subject", "creator", "producer", "creationdate", "moddate"}
@@ -79,14 +84,16 @@ def _extract_text(reader: PdfReader, full: bool, data: bytes) -> list[str]:
 
 def _ocr_page(document: pdfium.PdfDocument, index: int) -> str:
 	"""Render the complete page so OCR sees the same orientation and composition
-	as a reader, including placed images, cropping, and page rotation."""
+	as a reader, including placed images, cropping, and page rotation. Rendered
+	grayscale directly — a third of the bitmap memory, and tesseract runs on
+	grayscale anyway."""
 	page = None
 	bitmap = None
 	image = None
 	try:
 		page = document[index]
 		scale = min(OCR_DPI / 72, TARGET_LONG_SIDE / max(page.get_size()))
-		bitmap = page.render(scale=scale)
+		bitmap = page.render(scale=scale, grayscale=True)
 		image = bitmap.to_pil()
 		return _ocr(image)
 	except pdfium.PdfiumError:
@@ -102,8 +109,9 @@ def _ocr_page(document: pdfium.PdfDocument, index: int) -> str:
 
 def _ocr(image) -> str:
 	"""OCR one rendered page, trying each quarter-turn when the first read
-	scores poorly. Grayscale and contrast normalization help faint scans."""
-	image = ImageOps.autocontrast(ImageOps.grayscale(image))
+	scores poorly. Contrast normalization helps faint scans; the render already
+	arrives grayscale (mode L)."""
+	image = ImageOps.autocontrast(image)
 	long_side = max(image.width, image.height)
 	if long_side < TARGET_LONG_SIDE:
 		scale = max(1, min(4, round(TARGET_LONG_SIDE / long_side)))
@@ -150,6 +158,11 @@ def _summarize(texts: list[str], cap: int) -> str | None:
 
 @router.post("/pdf-metadata")
 async def pdf_metadata(payload: PdfUrlIn) -> dict:
+	async with _REQUEST_SLOTS:  # bounded queue; waiters hold only the URL
+		return await _run_pdf_metadata(payload)
+
+
+async def _run_pdf_metadata(payload: PdfUrlIn) -> dict:
 	# Download (streaming so the 10 MB cap holds even without a content-length)
 	chunks: list[bytes] = []
 	size = 0
