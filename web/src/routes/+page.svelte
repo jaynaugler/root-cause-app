@@ -9,7 +9,7 @@
 	import { MAX_HISTORY, type ThreadTurn } from '#lib/search.js';
 	import OrangePattern from '#lib/assets/OrangePattern.jpg';
 
-	let { form } = $props();
+	let { data, form } = $props();
 
 	type Mode = 'new' | 'followup';
 
@@ -155,6 +155,25 @@
 			{@render errors('new')}
 		</form>
 	</header>
+
+	<!-- Landing state: a browse list until the first search produces a thread -->
+	{#if !visibleTurns.length}
+		<section class="space-y-3">
+			<h2 class="text-lg font-medium">Recent records</h2>
+			{#if data.defaultRecords.length}
+				<div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+					{#each data.defaultRecords as record, i (record.id)}
+						<ResultsCard result={record} number={i + 1} anchorId={'default-' + i} />
+					{/each}
+				</div>
+			{:else}
+				<p class="text-sm text-muted-foreground">
+					No records in the archive yet. You can add one on the
+					<a href="/submit" class="underline">submit page</a>.
+				</p>
+			{/if}
+		</section>
+	{/if}
 
 	<!-- The thread: question → summary → records, oldest first -->
 	{#each visibleTurns as turn, t (t)}
