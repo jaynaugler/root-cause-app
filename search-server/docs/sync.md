@@ -32,7 +32,7 @@ what it has stored. The `sync` container keeps that copy up to date.
 Not the whole Mongo document, only the fields the search needs:
 
 ```
-title, description, attribution, link, resourceformat, contentcategory, imgurl, createdAt
+title, description, summary, attribution, link, resourceformat, contentcategory, imgurl, createdAt
 ```
 
 Two conversions are needed because Meilisearch only understands plain JSON:
@@ -40,7 +40,7 @@ Two conversions are needed because Meilisearch only understands plain JSON:
 - `createdAt` (a Python `datetime`) becomes an ISO text like `2026-11-07T10:00:00`.
 
 Meilisearch then creates the embedding (the "meaning" vector) for each new record by itself, from
-title and description. See [setup](setup.md#2-create-the-index-and-the-embedder).
+title and summary (or description when there is no summary). See [setup](setup.md#2-create-the-index-and-the-embedder).
 
 ### Step 1: full sync
 

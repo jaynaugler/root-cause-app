@@ -74,7 +74,8 @@ def build_prompt(question, hits, history=()):
     for number, hit in enumerate(hits[:SUMMARY_SOURCES], start=1):
         blocks.append(
             f"[{number}] {hit.get('title', '')}\n"
-            f"{hit.get('description', '')}\n"
+            # summary = full text; description (150-char teaser) only if a record has no summary
+            f"{hit.get('summary') or hit.get('description') or ''}\n"
             f"Held by: {hit.get('attribution', 'unknown')}"
         )
     sources = "\n\n".join(blocks)

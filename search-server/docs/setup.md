@@ -60,14 +60,19 @@ curl -X PATCH http://127.0.0.1:7700/indexes/records/settings/embedders \
     "default": {
       "source": "huggingFace",
       "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-      "documentTemplate": "{{doc.title}}. {{doc.description}}"
+      "documentTemplate": "{{doc.title}}. {% if doc.summary %}{{doc.summary}}{% else %}{{doc.description}}{% endif %}"
     }
   }'
 ```
 
 - `default` is the name. `main.py` refers to it (`"embedder": "default"`).
-- `documentTemplate` decides **which text gets embedded**: only title and description. The
-  `attribution` field is still searchable by keyword, but not by meaning.
+- `documentTemplate` decides **which text gets embedded**: the title and the `summary` (the full
+  text). Records without a summary use the short `description` instead. The `attribution` field is
+  still searchable by keyword, but not by meaning.
+- Only the start of a long summary counts: Meilisearch cuts the template text at 400 bytes
+  (`documentTemplateMaxBytes`), and the model itself only reads about 128 tokens.
+- To change the template on an existing index, just run this request again. Meilisearch then
+  re-computes the embeddings of all records (no re-sync needed).
 - Meilisearch downloads the model the first time, which can take a minute or two. The model is
   stored in the `meili_data` volume.
 
