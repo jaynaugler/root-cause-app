@@ -2,15 +2,17 @@
 	import type { Snippet } from 'svelte';
 
 	// Wrap any field: <MagicBorder active={loading}><Input … /></MagicBorder>
+	// `rounded` must match the field's own corners, so the ring and glow follow them
 	let {
 		active = false,
+		rounded = 'rounded-md',
 		class: className = '',
 		children
-	}: { active?: boolean; class?: string; children: Snippet } = $props();
+	}: { active?: boolean; rounded?: string; class?: string; children: Snippet } = $props();
 </script>
 
 <!-- Layers, back to front: blurred glow → solid background → the field → gradient ring on top -->
-<div class="magic rounded-md {className}" class:active>
+<div class="magic {rounded} {className}" class:active>
 	<span class="glow" aria-hidden="true"></span>
 	<div class="relative rounded-[inherit] bg-background">
 		{@render children()}
