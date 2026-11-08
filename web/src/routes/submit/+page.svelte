@@ -12,14 +12,17 @@
 	// Optional: the page hosting the resource (e.g. https://bccns.com/resources/)
 	let siteLink = $state('');
 	let description = $state('');
+	let summary = $state('');
 	let files: FileList | undefined = $state();
 
-	let errors = $state({ name: '', email: '', link: '', siteLink: '', description: '' });
+	let errors = $state({ name: '', email: '', link: '', siteLink: '', description: '', summary: '' });
 	let sent = $state(false);
 	let submitting = $state(false);
 	let apiError = $state('');
 
-	const MAX_DESCRIPTION = 500;
+	const MAX_DESCRIPTION = 150;
+	const MIN_SUMMARY = 250;
+	const MAX_SUMMARY = 2000;
 	const URL_PATTERN = /^https?:\/\/\S+$/;
 
 	// The name of the chosen image, or empty if none
@@ -33,17 +36,24 @@
 			email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) ? '' : 'Enter a valid email, like name@example.com',
 			link: URL_PATTERN.test(link.trim()) ? '' : 'Enter a full link, starting with https://',
 			siteLink: !siteLink.trim() || URL_PATTERN.test(siteLink.trim()) ? '' : 'Enter a full site link, starting with https://',
-			description: description.trim() ? '' : 'Describe what this link is.'
+			description: description.trim() ? '' : 'Describe what this link is.',
+			summary:
+				!summary.trim() || summary.trim().length >= MIN_SUMMARY
+					? ''
+					: `Write at least ${MIN_SUMMARY} characters, or leave this blank to use the extracted summary.`
 		};
 
-		if (errors.name || errors.email || errors.link || errors.siteLink || errors.description) return;
+		if (errors.name || errors.email || errors.link || errors.siteLink || errors.description || errors.summary) return;
 
-		// PDF resources run through the pipeline: extract → AI-clean → insert.
-		// (Web-page resources don't fit the current `resourceformat: 'pdf'` schema.)
+		// Gutenberg ebooks go through their own pipeline; everything else is
+		// treated as a PDF document. Both share the AI-clean + gate + insert path.
+		const endpoint = /gutenberg/i.test(link.trim())
+			? 'api/book-metadata'
+			: 'api/pdf-metadata';
 		submitting = true;
 		apiError = '';
 		try {
-			const metaRes = await fetch('/api/pdf-metadata', {
+			const metaRes = await fetch('/' + endpoint, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ url: link.trim() })
@@ -58,7 +68,16 @@
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				// Public submissions go to the review queue, not straight to search.
-				body: JSON.stringify({ ...meta, sitelink: siteLink.trim() || null, status: 'pending' })
+				body: JSON.stringify({
+					...meta,
+					sitelink: siteLink.trim() || null,
+					description: description.trim(),
+					summary:
+						summary.trim() ||
+						meta.summary ||
+						(meta.description?.length > MAX_DESCRIPTION ? meta.description : null),
+					status: 'pending'
+				})
 			});
 			if (!saveRes.ok) {
 				const body = (await saveRes.json().catch(() => null)) as
@@ -80,6 +99,7 @@
 		link = '';
 		siteLink = '';
 		description = '';
+		summary = '';
 		files = undefined;
 		sent = false;
 		apiError = '';
@@ -129,7 +149,7 @@
 			{:else}
 				<Card.Header>
 					<Card.Title class="text-2xl">Submit a request</Card.Title>
-					<Card.Description>Image upload is optional. Everything else is required.</Card.Description>
+					<Card.Description>Image upload, site link, and summary are optional. Everything else is required.</Card.Description>
 				</Card.Header>
 
 				<Card.Content>
@@ -181,7 +201,8 @@
 								aria-describedby={`link-help ${errors.link ? 'link-error' : ''}`}
 							/>
 							<p id="link-help" class="text-sm text-muted-foreground">
-								A direct link to a PDF document.
+								A direct link to a PDF document, or a Project Gutenberg ebook page
+								(https://www.gutenberg.org/ebooks/…).
 							</p>
 							{#if errors.link}
 								<p id="link-error" class="text-sm font-medium text-[#A84A42]">{errors.link}</p>
@@ -232,6 +253,31 @@
 								<p id="description-error" class="text-sm font-medium text-[#A84A42]">
 									{errors.description}
 								</p>
+							{/if}
+						</div>
+
+						<!-- Summary -->
+						<div class="space-y-2">
+							<Label for="summary">Summary <span class="text-muted-foreground">(optional)</span></Label>
+							<textarea
+								id="summary"
+								name="summary"
+								rows="8"
+								minlength={MIN_SUMMARY}
+								maxlength={MAX_SUMMARY}
+								bind:value={summary}
+								aria-invalid={errors.summary ? 'true' : undefined}
+								aria-describedby="summary-help {errors.summary ? 'summary-error' : ''}"
+								class="w-full rounded-md border border-input bg-white px-3 py-2 text-base shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-sm"
+							></textarea>
+							<div class="flex justify-between gap-4 text-sm">
+								<p id="summary-help" class="text-muted-foreground">
+									At least {MIN_SUMMARY} characters. Leave blank to use the summary extracted from the resource.
+								</p>
+								<p class="shrink-0 text-muted-foreground">{summary.length}/{MAX_SUMMARY}</p>
+							</div>
+							{#if errors.summary}
+								<p id="summary-error" class="text-sm font-medium text-[#A84A42]">{errors.summary}</p>
 							{/if}
 						</div>
 

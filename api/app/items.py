@@ -2,7 +2,7 @@
 web/src/routes/+page.server.ts: { _id (ObjectId -> string), name, createdAt }.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
@@ -33,6 +33,6 @@ async def list_items():
 
 @router.post("/items", status_code=201)
 async def create_item(payload: ItemIn):
-	created = datetime.now(timezone.utc)
+	created = datetime.now(UTC)
 	res = await coll.insert_one({"name": payload.name, "createdAt": created})
 	return {"_id": str(res.inserted_id), "name": payload.name, "createdAt": created}

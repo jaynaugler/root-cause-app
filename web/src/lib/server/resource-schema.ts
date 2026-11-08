@@ -17,10 +17,26 @@ export const RESOURCE_CATEGORIES = [
 // 'unapproved' is unused today: everything is inserted 'approved' for now.
 export const RESOURCE_STATUSES = ['pending', 'approved', 'unapproved'] as const;
 
+// Formats the fetch pipeline produces (api/app/pdf.py, api/app/book.py).
+export const RESOURCE_FORMATS = ['pdf', 'book'] as const;
+
 // Shared length rules (enforced by the Mongoose schema, the DB validator, and
 // the insert flow's description→summary fallback slice).
 export const MAX_DESCRIPTION_LENGTH = 150;
 export const MIN_SUMMARY_LENGTH = 250;
+
+// A teaser mustn't end mid-word or mid-sentence: cut at the last sentence end
+// within the cap, else the last whole word. Python mirrors this in
+// api/scripts/populate_books.py (two languages, one rule — keep in sync).
+export function truncateTeaser(text: string, cap: number = MAX_DESCRIPTION_LENGTH): string {
+	if (text.length <= cap) return text;
+	const cut = text.slice(0, cap);
+	const sentenceEnd = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+	if (sentenceEnd >= cap * 0.5) return cut.slice(0, sentenceEnd + 1);
+	const space = cut.lastIndexOf(' ');
+	if (space > cap * 0.5) return cut.slice(0, space) + '…';
+	return cut.slice(0, -1) + '…';
+}
 
 export type ResourceCategory = (typeof RESOURCE_CATEGORIES)[number];
 export type ResourceStatus = (typeof RESOURCE_STATUSES)[number];
@@ -32,7 +48,7 @@ export interface ResourceDoc {
 	description: string | null; // ≤150 chars, card teaser
 	summary: string | null; // ≥250 chars, full cleaned summary (search data)
 	attribution: string | null;
-	resourceformat: string; // enum: ['pdf']
+	resourceformat: (typeof RESOURCE_FORMATS)[number]; // 'pdf' | 'book'
 	contentcategory: ResourceCategory | null;
 	imgurl: string | null;
 	status: ResourceStatus;
@@ -52,7 +68,7 @@ export const resourceSchema = new mongoose.Schema<ResourceDoc>(
 		// minlength runs only on real strings — `null` (fallback records) stays legal.
 		summary: { type: String, default: null, minlength: MIN_SUMMARY_LENGTH },
 		attribution: { type: String, default: null },
-		resourceformat: { type: String, required: true, enum: ['pdf'] },
+		resourceformat: { type: String, required: true, enum: [...RESOURCE_FORMATS] },
 		contentcategory: { type: String, enum: [...RESOURCE_CATEGORIES], default: null },
 		imgurl: { type: String, default: null },
 		status: { type: String, required: true, enum: [...RESOURCE_STATUSES] },
