@@ -58,6 +58,7 @@ async def get_pending_resources(limit: int = 100):
                     "name": 1,
                     "email": 1,
                     "description": 1,
+                    "submittedDescription": 1,
                     "link": 1,
                     "sitelink": 1,
                     "attachmentName": 1,
@@ -97,7 +98,8 @@ async def get_pending_resources(limit: int = 100):
                 "id": str(doc["_id"]),
                 "name": doc.get("name"),
                 "email": doc.get("email"),
-                "description": doc.get("description"),
+                # Legacy pending records kept submitter text in description.
+                "description": doc.get("submittedDescription", doc.get("description")),
                 "link": doc.get("link"),
                 "sitelink": doc.get("sitelink"),
                 "attachmentName": attachment_name,
@@ -142,7 +144,7 @@ async def approve_resource(doc_id: str):
     update_data: dict[str, Any] = {
         "status": "approved",
         "title": meta.get("title") or doc.get("name") or "Untitled Document",
-        "description": meta.get("description") or doc.get("description"),
+        "description": meta.get("description"),
         "summary": meta.get("summary"),
         "attribution": meta.get("attribution") or doc.get("name"),
         "contentcategory": meta.get("contentcategory"),
@@ -153,7 +155,7 @@ async def approve_resource(doc_id: str):
     try:
         await coll.update_one(
             {"_id": oid},
-            {"$set": update_data},
+            {"$set": update_data, "$unset": {"submittedDescription": ""}},
         )
     except PyMongoError as e:
         raise HTTPException(
@@ -193,7 +195,9 @@ async def modify_pending_resource(doc_id: str, payload: ModifySubmissionPayload)
         else:
             update_fields[k] = v
 
-    # Normalize attachment field names if provided
+    # Normalize submission-only and attachment field names if provided.
+    if "description" in update_fields:
+        update_fields["submittedDescription"] = update_fields.pop("description")
     if "attachment_name" in update_fields:
         update_fields["attachmentName"] = update_fields.pop("attachment_name")
     if "attachment_url" in update_fields:

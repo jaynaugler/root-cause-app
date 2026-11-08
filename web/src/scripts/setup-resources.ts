@@ -33,6 +33,8 @@ const RESOURCE_SCHEMA = {
 		// Optional (curator-supplied): the site page hosting the resource.
 		sitelink: { bsonType: ['string', 'null'], pattern: '^https?://', maxLength: 2000 },
 		description: { bsonType: ['string', 'null'], maxLength: 150 },
+		// Optional submitter context for pending review; removed on approval.
+		submittedDescription: { bsonType: ['string', 'null'], maxLength: 150 },
 		// minLength applies to strings only; null (fallback records) is still valid.
 		summary: { bsonType: ['string', 'null'], minLength: 250 },
 		attribution: { bsonType: ['string', 'null'] },

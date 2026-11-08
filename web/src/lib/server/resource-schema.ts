@@ -45,7 +45,8 @@ export interface ResourceDoc {
 	title: string | null;
 	link: string; // the resource itself (e.g. the direct PDF download)
 	sitelink: string | null; // the page hosting it (e.g. bccns.com/resources/) — curator-supplied
-	description: string | null; // ≤150 chars, card teaser
+	description: string | null; // ≤150 chars, generated card teaser
+	submittedDescription?: string | null; // pending-review notes; removed on approval
 	summary: string | null; // ≥250 chars, full cleaned summary (search data)
 	attribution: string | null;
 	resourceformat: (typeof RESOURCE_FORMATS)[number]; // 'pdf' | 'book' | 'video'
@@ -65,6 +66,7 @@ export const resourceSchema = new mongoose.Schema<ResourceDoc>(
 		// at insert (falls back to null for direct PDFs from unknown sites).
 		sitelink: { type: String, default: null, match: /^https?:\/\//, maxlength: 2000 },
 		description: { type: String, default: null, maxlength: MAX_DESCRIPTION_LENGTH },
+		submittedDescription: { type: String, maxlength: MAX_DESCRIPTION_LENGTH },
 		// minlength runs only on real strings — `null` (fallback records) stays legal.
 		summary: { type: String, default: null, minlength: MIN_SUMMARY_LENGTH },
 		attribution: { type: String, default: null },

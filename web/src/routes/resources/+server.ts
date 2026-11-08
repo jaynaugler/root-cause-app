@@ -3,8 +3,6 @@ import type { RequestHandler } from './$types';
 import { z } from 'zod';
 import { getResourceModel } from '#lib/server/resources.js';
 import { requireUserApi } from '#lib/server/guards.js';
-import { RESOURCE_CATEGORIES } from '#lib/server/resource-schema.js';
-import { MAX_DESCRIPTION_LENGTH, MIN_SUMMARY_LENGTH } from '#lib/server/resource-schema.js';
 import {
 	RESOURCE_CATEGORIES,
 	RESOURCE_FORMATS,
@@ -21,6 +19,7 @@ const insertSchema = z.object({
 	link: z.string(),
 	sitelink: z.string().nullish(),
 	description: z.string().nullish(),
+	submittedDescription: z.string().nullish(),
 	summary: z.string().nullish(),
 	attribution: z.string().nullish(),
 	resourceformat: z.enum(RESOURCE_FORMATS),
@@ -67,6 +66,9 @@ export const POST: RequestHandler = async (event) => {
 			link: data.link,
 			sitelink: data.sitelink ?? null,
 			description,
+			...(data.status === 'pending'
+				? { submittedDescription: data.submittedDescription ?? null }
+				: {}),
 			summary,
 			attribution: data.attribution ?? null,
 			resourceformat: data.resourceformat,
