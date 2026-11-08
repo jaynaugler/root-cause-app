@@ -7,6 +7,10 @@ describe('valueLabel', () => {
 		expect(valueLabel('contentcategory', 'people')).toBe('People');
 		expect(valueLabel('resourceformat', 'pdf')).toBe('PDF');
 		expect(valueLabel('resourceformat', 'book')).toBe('Books');
+		expect(valueLabel('resourceformat', 'video')).toBe('Videos');
+		expect(valueLabel('resourceformat', 'podcast')).toBe('Podcasts');
+		// A format without a label yet: capitalized
+		expect(valueLabel('resourceformat', 'map')).toBe('Map');
 	});
 
 	it('shows source names as stored', () => {

@@ -98,7 +98,15 @@ export function facetConfig(field: FacetField): FacetConfig {
 }
 
 // How a stored value is shown: people → People, pdf → PDF. Sources are names: shown as stored.
-const FORMAT_LABELS: Record<string, string> = { pdf: 'PDF', book: 'Books' };
+// One label per format in RESOURCE_FORMATS (#lib/server/resource-schema.ts; not imported here,
+// because that file is server-only). A new format without a label shows capitalized.
+const FORMAT_LABELS: Record<string, string> = {
+	pdf: 'PDF',
+	book: 'Books',
+	video: 'Videos',
+	article: 'Articles',
+	podcast: 'Podcasts'
+};
 
 export function valueLabel(field: FacetField, value: string): string {
 	if (field === 'attribution') return value;
