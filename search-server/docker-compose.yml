@@ -15,7 +15,7 @@ services:
       - API_KEY=${API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=gemini-3.5-flash-lite
-      - SUMMARY_PROVIDER=ollama
+      - SUMMARY_PROVIDER=gemini
       - SCORE_THRESHOLD=0.7
       - FALLBACK_THRESHOLD=0.6
     depends_on:
