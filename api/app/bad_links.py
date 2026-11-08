@@ -1,83 +1,61 @@
+"""Background link checking and link repair endpoints for resources in the archive."""
+
 import asyncio
-import os
-from typing import List, Optional, Dict, Any
-from pathlib import Path
+from typing import Any
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from bson import ObjectId, errors
 import httpx
-from motor.motor_asyncio import AsyncIOMotorClient
+from bson import ObjectId
+from bson.errors import InvalidId
+from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel
+from pymongo.errors import PyMongoError
 
-# =====================================================================
-# PRODUCTION CONFIGURATION ENGINE
-# =====================================================================
+from app.db import db
 
-# Locate the root folder where your .env file lives relative to this file
-# api/app/bad_links.py -> api/app -> api -> root-cause-app/.env
-CURRENT_FILE_PATH = Path(__file__).resolve()
-ROOT_DIR = CURRENT_FILE_PATH.parent.parent.parent
-ENV_FILE_PATH = ROOT_DIR / ".env"
+router = APIRouter(tags=["bad-links"])
 
+coll = db["resources"]
 
-class DatabaseSettings(BaseSettings):
-    """
-    Production settings module. Auto-loads parameters directly from 
-    system environment memory, falling back seamlessly to the root
-    project .env file definition when run locally.
-    """
-    # Map fields dynamically to matching keys from your .env file
-    atlas_uri: Optional[str] = None
-    mongodb_uri: str = "mongodb://localhost:27017"
-    atlas_db: Optional[str] = None
-    mongodb_db: str = "root-cause_db"
-
-    model_config = SettingsConfigDict(
-        # Target the absolute path to your root .env
-        env_file=str(ENV_FILE_PATH),
-        env_file_extra_ignore=True,  # Safely ignore non-database keys
-        extra="ignore"
-    )
-
-
-# Instantiate settings safely across machines
-settings = DatabaseSettings()
-
-# Extract variables based on precedence rules
-MONGO_URI = settings.atlas_uri or settings.mongodb_uri
-DB_NAME = settings.atlas_db or settings.mongodb_db
-
-# Initialize database pool connection safely
-client_db = AsyncIOMotorClient(MONGO_URI)
-db = client_db[DB_NAME]
-
-router = APIRouter()
+# Concurrency semaphore: prevent thousands of simultaneous outgoing HTTP requests
+MAX_CONCURRENT_CHECKS = 20
+_CHECK_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_CHECKS)
 
 
 class UpdateLinkPayload(BaseModel):
-    link: str
+    link: str | None = None
+    sitelink: str | None = None
 
 
-async def is_link_broken(client: httpx.AsyncClient, url: Optional[str]) -> bool:
-    """
-    Checks if a URL is broken using a fast HEAD request.
+def _parse_object_id(doc_id: str) -> ObjectId:
+    try:
+        return ObjectId(doc_id)
+    except (InvalidId, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The provided ID is not a valid ObjectId format.",
+        )
+
+
+async def is_link_broken(client: httpx.AsyncClient, url: str | None) -> bool:
+    """Check if a URL is broken using a fast HEAD request.
+
     Falls back to a GET request if the server rejects HEAD requests.
     """
     if not url:
         return False
 
-    try:
-        response = await client.head(url, timeout=10.0, follow_redirects=True)
-        if response.is_error or response.status_code == 404 or response.status_code == 405 or response.status_code == 501:
-            response = await client.get(url, timeout=10.0, follow_redirects=True)
-        return response.is_error
-    except (httpx.HTTPError, asyncio.TimeoutError):
-        return True
+    async with _CHECK_SEMAPHORE:
+        try:
+            response = await client.head(url, timeout=10.0, follow_redirects=True)
+            if response.is_error or response.status_code in (404, 405, 501):
+                response = await client.get(url, timeout=10.0, follow_redirects=True)
+            return response.is_error
+        except (TimeoutError, httpx.HTTPError):
+            return True
 
 
-async def check_record(client: httpx.AsyncClient, doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """ Checks both the link and sitelink for a single document record. """
+async def check_record(client: httpx.AsyncClient, doc: dict[str, Any]) -> dict[str, Any] | None:
+    """Check both the direct link and sitelink for a single resource record."""
     doc_id = str(doc.get("_id"))
     title = doc.get("title")
     attribution = doc.get("attribution")
@@ -98,78 +76,97 @@ async def check_record(client: httpx.AsyncClient, doc: Dict[str, Any]) -> Option
             "sitelink": sitelink,
             "issues": {
                 "link_broken": link_broken,
-                "sitelink_broken": sitelink_broken
-            }
+                "sitelink_broken": sitelink_broken,
+            },
         }
     return None
 
 
 @router.get("/bad-links")
-async def get_bad_links():
+async def get_bad_links(limit: int = 500):
+    """Scan archive resource records to detect broken links and sitelinks."""
     try:
-        # Read from your actual MongoDB resources collection
-        cursor = db.resources.find(
-            {}, {"title": 1, "attribution": 1, "link": 1, "sitelink": 1})
-        docs = await cursor.to_list(length=None)
-        broken_records = []
-
-        async with httpx.AsyncClient() as client:
-            tasks = [check_record(client, doc) for doc in docs]
-            results = await asyncio.gather(*tasks)
-            broken_records = [r for r in results if r is not None]
-
-        return {
-            "success": True,
-            "count": len(broken_records),
-            "broken_records": broken_records
-        }
-    except Exception as e:
+        cursor = coll.find({}, {"title": 1, "attribution": 1, "link": 1, "sitelink": 1}).limit(
+            limit
+        )
+        docs = await cursor.to_list(limit)
+    except PyMongoError as e:
         raise HTTPException(
-            status_code=500, detail=f"Database aggregation failed: {str(e)}")
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database aggregation failed: {e!s}",
+        ) from e
+
+    async with httpx.AsyncClient() as client:
+        tasks = [check_record(client, doc) for doc in docs]
+        results = await asyncio.gather(*tasks)
+        broken_records = [r for r in results if r is not None]
+
+    return {
+        "success": True,
+        "count": len(broken_records),
+        "broken_records": broken_records,
+    }
 
 
 @router.patch("/bad-links/{doc_id}")
 async def update_bad_link(doc_id: str, payload: UpdateLinkPayload):
-    try:
-        oid = ObjectId(doc_id)
-    except errors.InvalidId:
-        raise HTTPException(
-            status_code=400, detail="The provided ID is not a valid ObjectId format.")
+    """Update destination link and/or host sitelink for a resource."""
+    oid = _parse_object_id(doc_id)
 
-    try:
-        # Commit the modification back into the live Mongo cluster
-        result = await db.resources.update_one(
-            {"_id": oid},
-            {"$set": {"link": payload.link}}
+    update_fields: dict[str, Any] = {}
+    if payload.link is not None:
+        link_str = payload.link.strip()
+        if not link_str:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Link cannot be empty.",
+            )
+        update_fields["link"] = link_str
+
+    if payload.sitelink is not None:
+        sitelink_str = payload.sitelink.strip()
+        update_fields["sitelink"] = sitelink_str or None
+
+    if not update_fields:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No valid fields provided to update.",
         )
 
-        if result.matched_count == 0:
-            raise HTTPException(
-                status_code=404, detail="Resource record could not be found.")
-
-        return {"success": True, "message": "Link successfully updated in database."}
-    except Exception as e:
+    try:
+        result = await coll.update_one({"_id": oid}, {"$set": update_fields})
+    except PyMongoError as e:
         raise HTTPException(
-            status_code=500, detail=f"Database update failed: {str(e)}")
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database update failed: {e!s}",
+        ) from e
+
+    if result.matched_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource record could not be found.",
+        )
+
+    return {"success": True, "message": "Link successfully updated in database."}
 
 
 @router.delete("/bad-links/{doc_id}")
 async def delete_resource(doc_id: str):
-    try:
-        oid = ObjectId(doc_id)
-    except errors.InvalidId:
-        raise HTTPException(
-            status_code=400, detail="The provided ID is not a valid ObjectId format.")
+    """Permanently delete a broken resource from the database."""
+    oid = _parse_object_id(doc_id)
 
     try:
-        # Permanently purge the full record line out of the database matching the UI command
-        result = await db.resources.delete_one({"_id": oid})
-
-        if result.deleted_count == 0:
-            raise HTTPException(
-                status_code=404, detail="Resource record could not be found.")
-
-        return {"success": True, "message": "Resource permanently purged from database."}
-    except Exception as e:
+        result = await coll.delete_one({"_id": oid})
+    except PyMongoError as e:
         raise HTTPException(
-            status_code=500, detail=f"Database deletion failed: {str(e)}")
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database deletion failed: {e!s}",
+        ) from e
+
+    if result.deleted_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource record could not be found.",
+        )
+
+    return {"success": True, "message": "Resource permanently purged from database."}
