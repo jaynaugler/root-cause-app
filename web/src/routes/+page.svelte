@@ -242,8 +242,9 @@
 		filterTimer = setTimeout(() => fetchRecords(id, filters), FILTER_DELAY);
 	}
 
-	async function fetchRecords(id: number, filters: Filters, offset = 0, notify = true) {
-		const answer = await askLatest(filters, false, newSignal(), offset);
+	// A filter change always goes back to page 1 (offset 0): the old page number may not exist
+	async function fetchRecords(id: number, filters: Filters) {
+		const answer = await askLatest(filters, false, newSignal());
 		if (id !== refineId) return; // a newer change or a new search took over
 		refining = false;
 
@@ -252,42 +253,59 @@
 			refineError = 'Could not apply the filter. Try again.';
 		} else if (!answer.results.length) {
 			// Nothing matches: nothing to summarise either
-			replaceLatest({ results: [], total: 0, offset: answer.offset, facets: answer.facets, summary: null, provider: null, summaryStale: false });
-			if (notify) setStatus(false);
+			replaceLatest({ results: [], total: 0, offset: 0, facets: answer.facets, summary: null, provider: null, summaryStale: false });
+			setStatus(false);
 		} else {
 			// The old summary stays visible but is marked stale: its [1], [2] meant other records
-			replaceLatest({ results: answer.results, total: answer.total, offset: answer.offset, facets: answer.facets, summaryStale: true });
-			scheduleSummary(id, notify);
+			replaceLatest({ results: answer.results, total: answer.total, offset: 0, facets: answer.facets, summaryStale: true });
+			scheduleSummary(id);
 		}
 	}
 
+	// Previous / Next under the newest answer: other records, same summary. The summary is
+	// about the best records (page 1), and they don't change when you page, so it stays as it is
+	// (no new AI call per click). Its [1], [2] point at page 1's cards.
 	function changeSearchPage(page: number) {
-		lastGoodFilters = activeFilters;
-		const id = cancelRefine();
-		summaryUpdating = false;
+		const id = cancelRefine(); // also stops a summary still waiting after a filter change…
 		refineError = '';
-		refineStatus = null;
 		refining = true;
-		fetchRecords(id, activeFilters, (page - 1) * SEARCH_LIMIT, false);
+		fetchPage(id, (page - 1) * SEARCH_LIMIT);
 		scrollToTop(`turn-${thread.length - 1}`);
 	}
 
-	// Step 2: rewrite the summary once the clicking has stopped
-	function scheduleSummary(id: number, notify = true) {
+	async function fetchPage(id: number, offset: number) {
+		const answer = await askLatest(activeFilters, false, newSignal(), offset);
+		if (id !== refineId) return; // a newer change or a new search took over
+		refining = false;
+		if (answer) {
+			replaceLatest({ results: answer.results, total: answer.total, offset, facets: answer.facets });
+		} else {
+			refineError = 'Could not load that page. Try again.'; // the old page stays
+		}
+		// …so it is started again here
+		if (thread.at(-1)?.summaryStale) scheduleSummary(id);
+	}
+
+	// Step 2: rewrite the summary once the clicking has stopped. Always for page 1 (no offset):
+	// the summary is about the best records, whatever page is on screen.
+	function scheduleSummary(id: number) {
 		clearTimeout(summaryTimer);
 		summaryUpdating = true;
 		summaryTimer = setTimeout(async () => {
-			const answer = await askLatest(activeFilters, true, newSignal(), activeOffset);
+			const answer = await askLatest(activeFilters, true, newSignal());
 			if (id !== refineId) return;
 			summaryUpdating = false;
-			// Take the whole answer: records and summary come from the same search, so [n] match.
+			// On page 1: take the whole answer, records and summary come from the same search, so
+			// [n] match. On another page: only the summary, the records on screen stay.
 			// If it failed, show "no summary" rather than one about other records.
 			replaceLatest(
-				answer
-					? { ...answer, summaryStale: false }
-					: { summary: null, provider: null, summaryStale: false }
+				!answer
+					? { summary: null, provider: null, summaryStale: false }
+					: activeOffset === 0
+						? { ...answer, offset: 0, summaryStale: false }
+						: { summary: answer.summary, provider: answer.provider, summaryStale: false }
 			);
-			if (notify) setStatus(!!answer?.summary);
+			setStatus(!!answer?.summary);
 		}, SUMMARY_DELAY);
 	}
 
@@ -333,7 +351,11 @@
 		browseTimer = setTimeout(() => fetchBrowse(filters, 0), FILTER_DELAY);
 	}
 
-	async function fetchBrowse(filters: Filters, offset: number) {
+	async function fetchBrowse(
+		filters: Filters,
+		offset: number,
+		failMessage = 'Could not apply the filter. Try again.'
+	) {
 		const controller = new AbortController();
 		browseController = controller;
 		browseLoading = true;
@@ -357,14 +379,18 @@
 		} catch {
 			if (controller.signal.aborted) return; // cancelled by a newer change
 			browseFilters = lastGoodBrowseFilters; // undo, the list didn't change
-			browseError = 'Could not apply the filter. Try again.';
+			browseError = failMessage;
 		} finally {
 			if (controller === browseController) browseLoading = false;
 		}
 	}
 
+	// Previous / Next under the list. Same filters, another slice of the list. (The buttons are
+	// disabled while the list is loading, so no filter change can be waiting at this point: the
+	// filters are the ones on screen, and a failure must keep them, not undo an older change.)
 	function changeBrowsePage(page: number) {
-		fetchBrowse(browseFilters, (page - 1) * RECENT_LIMIT);
+		lastGoodBrowseFilters = browseFilters;
+		fetchBrowse(browseFilters, (page - 1) * RECENT_LIMIT, 'Could not load that page. Try again.');
 		scrollToTop('recent-records');
 	}
 
@@ -543,25 +569,20 @@
 
 	<!-- Browse list: the newest records (from search-api /api/browse, see +page.server.ts).
 	     Open on a fresh visit; collapses on search, then it's a toggle. -->
-	<details id="recent-records" bind:open={recentsOpen} class="recents space-y-3">
+	<details id="recent-records" bind:open={recentsOpen} class="recents scroll-mt-6 space-y-3">
 		<summary class="cursor-pointer text-sm font-medium text-muted-foreground select-none">
 			Recent records
-			{#if recent.total > recent.results.length}
+			<!-- More than one page: which slice is shown, e.g. "· 13–24 of 70" -->
+			{#if recent.total > recent.results.length && recent.results.length}
 				<span class="font-normal">
-					· {recent.results.length} shown of {recent.total}{browseFiltered ? ' matching' : ''}
+					· {browseOffset + 1}–{browseOffset + recent.results.length} of {recent.total}{browseFiltered
+						? ' matching'
+						: ''}
 				</span>
 			{:else if browseFiltered && recent.total}
 				<span class="font-normal">· {recent.total} matching</span>
 			{/if}
 		</summary>
-		<Pagination
-			page={Math.floor(browseOffset / RECENT_LIMIT) + 1}
-			total={recent.total}
-			pageSize={RECENT_LIMIT}
-			loading={browseLoading}
-			label="Recent record pages"
-			onPage={changeBrowsePage}
-		/>
 		<!-- Read out by screen readers once the list has changed after a filter change -->
 		<p role="status" class="sr-only">{browseStatus}</p>
 		<!-- While the list is being narrowed: dimmed, and marked busy for screen readers -->
@@ -572,10 +593,20 @@
 			{#if recent.results.length}
 				<div class="grid grid-cols-1 gap-3 md:grid-cols-3">
 					{#each recent.results as record, i (record.id)}
-						<ResultsCard result={record} number={i + 1} anchorId={'recent-' + i} />
+						<!-- Numbered across pages: page 2 starts at 13 -->
+						<ResultsCard result={record} number={browseOffset + i + 1} anchorId={'recent-' + i} />
 					{/each}
 				</div>
-				{:else if recent.failed}
+				<!-- Under the cards, where you are after reading them. Hidden with a single page. -->
+				<Pagination
+					page={Math.floor(browseOffset / RECENT_LIMIT) + 1}
+					total={recent.total}
+					pageSize={RECENT_LIMIT}
+					loading={browseLoading}
+					label="Recent record pages"
+					onPage={changeBrowsePage}
+				/>
+			{:else if recent.failed}
 				<p class="text-sm text-muted-foreground">
 					Could not load the recent records. Searching may still work; try reloading the page
 					later.
@@ -600,6 +631,7 @@
 	{#each visibleTurns as turn, t (t)}
 		{@const isLatest = t === visibleTurns.length - 1}
 		{@const found = turn.total ?? turn.results.length}
+		{@const offset = turn.offset ?? 0}
 		<!-- aria-busy: tells screen readers this part is being updated (after a filter change) -->
 		<article
 			id="turn-{t}"
@@ -623,15 +655,29 @@
 				class="group space-y-3 transition-opacity {isLatest && refining ? 'opacity-60' : ''}"
 			>
 				<summary class="cursor-pointer text-sm font-medium text-muted-foreground select-none">
-					{#if found > turn.results.length}
-						{turn.results.length} shown of {plural(found, 'record')}
+					<!-- More than one page: which slice is shown, e.g. "9–16 of 40 records" -->
+					{#if found > turn.results.length && turn.results.length}
+						{offset + 1}–{offset + turn.results.length} of {plural(found, 'record')}
 					{:else}
 						{plural(turn.results.length, 'record')} found
 					{/if}
 				</summary>
+				<div class="mt-3 grid grid-cols-1 gap-3">
+					<!-- Numbered across pages (page 2 starts at 9). The id uses the same number, so
+					     the summary's [1] only ever finds card 1, never another page's first card. -->
+					{#each turn.results as result, i (result.id)}
+						<ResultsCard
+							{result}
+							number={offset + i + 1}
+							anchorId="t{t}-result-{offset + i + 1}"
+							searchMode
+						/>
+					{/each}
+				</div>
+				<!-- Under the cards; only the newest answer can change page (like the filters) -->
 				{#if isLatest}
 					<Pagination
-						page={Math.floor((turn.offset ?? 0) / SEARCH_LIMIT) + 1}
+						page={Math.floor(offset / SEARCH_LIMIT) + 1}
 						total={found}
 						pageSize={SEARCH_LIMIT}
 						loading={refining}
@@ -639,11 +685,6 @@
 						onPage={changeSearchPage}
 					/>
 				{/if}
-				<div class="mt-3 grid grid-cols-1 gap-3">
-					{#each turn.results as result, i (result.id)}
-						<ResultsCard {result} number={i + 1} anchorId="t{t}-result-{i + 1}" searchMode />
-					{/each}
-				</div>
 			</details>
 		</article>
 	{/each}
