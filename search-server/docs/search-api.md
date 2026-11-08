@@ -31,6 +31,7 @@ Content-Type: application/json
 | `limit`    | no       | 1–20, default 8                          | How many records to return at most              |
 | `provider` | no       | `"ollama"` or `"gemini"`                 | Which AI writes the answer (default from settings) |
 | `history`  | no       | max 3 turns, oldest first; each `question` ≤ 500, `summary` ≤ 2000 chars | Earlier questions and answers, for follow-ups |
+| `summary`  | no       | `true` (default) or `false`              | `false` skips the AI: only records and counts, in milliseconds (used for filter clicks) |
 | `filters`  | no       | keys only `contentcategory`, `attribution`, `resourceformat`; max 20 values each, 1–200 chars | Only records with these values (the checkboxes). See [Filters](#filters-and-counts-facets) |
 
 **Response**
@@ -69,7 +70,7 @@ POST /api/search
    ├─ 3. Meilisearch hybrid search (keywords + meaning, + filters, as one /multi-search) ── error → 502
    │       → hits with score ≥ 0.7 (nothing? again with ≥ 0.6), at most `limit`
    │       → counts per filter value (facets)
-   ├─ 4. no hits? → summary = null, skip to 6
+   ├─ 4. no hits, or "summary": false? → summary = null, skip to 6
    ├─ 5. build prompt (history + top 5 hits + question)
    │       → Gemini (if chosen) ──fails──► Ollama ──fails──► summary = null
    │       → trim answer to 2000 characters
@@ -161,17 +162,30 @@ add it. Shops count each group **without its own checkboxes** (they are alternat
 
 | Search | Filter | Used for |
 | ------ | ------ | -------- |
-| main | people AND pdf | `results` + counts of fields with nothing checked (`attribution`) |
-| count 1 | only pdf | counts of `contentcategory` (`limit: 1`, the record is ignored) |
-| count 2 | only people | counts of `resourceformat` |
+| main | people AND pdf | `results` only (`limit` from the request, e.g. 8) |
+| count 1 | people AND pdf | counts of fields with nothing checked (`attribution`) |
+| count 2 | only pdf | counts of `contentcategory` |
+| count 3 | only people | counts of `resourceformat` |
 
-All of them go to Meilisearch in **one** request (`/multi-search`), so it's 1 + one search per
-field with checked values. Without filters it's a single search, as before.
+All of them go to Meilisearch in **one** request (`/multi-search`): the main search, one count
+search for the fields with nothing checked, and one per field with checked values. Without
+filters that's 2 searches.
 
-Why `limit: 1` and not 0 for the count searches: with `limit: 0`, Meilisearch skips the meaning
-part of a hybrid search, and records that only match by meaning would be missing from the counts.
-With `limit: 1` (or more) it counts **all** matches, also far beyond the limit (tested with 45
-matches and `limit: 1`).
+**Why counts never come from the main search, and why the count searches use `limit: 1000`:**
+Meilisearch applies the score threshold only to records it actually *ranks*, and it stops
+ranking after `limit` records. If more records pass the threshold than `limit` allows, it never
+reaches the weak ones, so it can't exclude them, and they end up in the counts. Example (3 good
+matches, 57 weak ones, threshold 0.7):
+
+| `limit` | Count for "book" |
+| ------- | ---------------- |
+| 1, 2, 3 | 57 (wrong, includes the weak matches) |
+| 4 or more | 1 (right) |
+
+So the count searches rank up to `COUNT_LIMIT` = 1000 records (Meilisearch's maximum) and return
+only each record's `id`. Counts are exact as long as fewer than 1000 records pass the threshold.
+Not `limit: 0`: that makes Meilisearch skip the meaning half of a hybrid search, so records that
+only match by meaning would be missing.
 
 All searches use the **same** threshold. If the main search finds nothing at 0.7, the whole set is
 re-run at 0.6. Meilisearch applies the threshold to hits and counts alike, so the counts always
