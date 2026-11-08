@@ -17,14 +17,17 @@
         anchorId: string;
         children?: Snippet;
     } = $props();
+
+    // Prefer the human-readable hosting page; fall back to the resource itself.
+    let href = $derived(result.sitelink || result.link);
 </script>
 
 <Card.Root id={anchorId} class="mx-auto w-full aspect-[1.1/1] bg-card-bg scroll-mt-6">
     <Card.Header class="-mt-(--card-spacing) px-0">
         <Card.Title class="w-full bg-card-title text-left text-white text-xl px-(--card-spacing) py-5 rounded-t-xl">
             {number}.
-            {#if result.link}
-                <a href={result.link} target="_blank" rel="noopener noreferrer" class="hover:underline">
+            {#if href}
+                <a href={href} target="_blank" rel="noopener noreferrer" class="hover:underline">
                     {result.title ?? 'Untitled record'}
                 </a>
             {:else}
@@ -46,10 +49,10 @@
 
         {@render children?.()}
 
-        {#if result.link}
+        {#if href}
             <Button
                 class="mt-auto self-end inline-flex h-12 w-40 items-center justify-between overflow-hidden bg-card-btn p-0 text-white hover:bg-card-btn-hover"
-                href={result.link}
+                href={href}
                 target="_blank"
                 rel="noopener noreferrer"
             >

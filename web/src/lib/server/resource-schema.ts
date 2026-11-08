@@ -42,11 +42,14 @@ export type ResourceCategory = (typeof RESOURCE_CATEGORIES)[number];
 export type ResourceStatus = (typeof RESOURCE_STATUSES)[number];
 
 export interface ResourceDoc {
+	name?: string | null; // pending-review contact; removed on approval
+	email?: string | null; // pending-review contact; removed on approval
 	title: string | null;
 	link: string; // the resource itself (e.g. the direct PDF download)
 	sitelink: string | null; // the page hosting it (e.g. bccns.com/resources/) — curator-supplied
 	description: string | null; // ≤150 chars, generated card teaser
 	submittedDescription?: string | null; // pending-review notes; removed on approval
+	submittedSummary?: string | null; // submitter-written summary; removed on approval
 	summary: string | null; // ≥250 chars, full cleaned summary (search data)
 	attribution: string | null;
 	resourceformat: (typeof RESOURCE_FORMATS)[number]; // 'pdf' | 'book' | 'video'
@@ -60,6 +63,8 @@ export interface ResourceDoc {
 // silently dropped — strict: 'throw'. The insert flow must strip them itself.
 export const resourceSchema = new mongoose.Schema<ResourceDoc>(
 	{
+		name: { type: String, maxlength: 150 },
+		email: { type: String, maxlength: 255 },
 		title: { type: String, default: null, maxlength: 300 },
 		link: { type: String, required: true, match: /^https?:\/\//, maxlength: 2000 },
 		// Optional: the fetch pipeline can't derive it; the curator supplies it
@@ -67,6 +72,7 @@ export const resourceSchema = new mongoose.Schema<ResourceDoc>(
 		sitelink: { type: String, default: null, match: /^https?:\/\//, maxlength: 2000 },
 		description: { type: String, default: null, maxlength: MAX_DESCRIPTION_LENGTH },
 		submittedDescription: { type: String, maxlength: MAX_DESCRIPTION_LENGTH },
+		submittedSummary: { type: String, minlength: MIN_SUMMARY_LENGTH, maxlength: 2000 },
 		// minlength runs only on real strings — `null` (fallback records) stays legal.
 		summary: { type: String, default: null, minlength: MIN_SUMMARY_LENGTH },
 		attribution: { type: String, default: null },
