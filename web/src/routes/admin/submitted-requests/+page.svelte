@@ -329,7 +329,7 @@
 </script>
 
 <svelte:head>
-	<title>Submitted Requests · Our History Hub</title>
+	<title>Submitted Requests · Black History Knowledge Hub</title>
 </svelte:head>
 
 <main class="container mx-auto max-w-4xl px-4 py-12 space-y-6">
