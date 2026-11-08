@@ -66,7 +66,7 @@ POST /api/search
    │
    ├─ 1. check X-API-Key ─────────────────────────── wrong → 401
    ├─ 2. build search text: last 2 earlier questions + new question
-   ├─ 3. Meilisearch hybrid search (keywords + meaning, + filters) ── error → 502
+   ├─ 3. Meilisearch hybrid search (keywords + meaning, + filters, as one /multi-search) ── error → 502
    │       → hits with score ≥ 0.7 (nothing? again with ≥ 0.6), at most `limit`
    │       → counts per filter value (facets)
    ├─ 4. no hits? → summary = null, skip to 6
@@ -151,13 +151,34 @@ too. Filtering hits in Python afterwards would make the counts disagree with the
 `People" OR 1=1` stays one harmless value instead of changing the filter (same idea as SQL
 injection).
 
-Every search also sends `"facets": [...]`, so Meilisearch returns how many matching records have
-each value (`facetDistribution`). We return it as `facets`. Hits and counts come from the **same**
-search (also when the 0.6 fallback runs), and Meilisearch applies the threshold to both, so they
-always agree.
+We also send `"facets": [...]`, so Meilisearch returns how many matching records have each value
+(`facetDistribution`). We return it as `facets`.
 
-**Known limit:** when a box is checked, the other values of *that* field drop out of the counts
-(check "people" and "history" shows no number). Fixing this needs a second count per field.
+**Counting a field without its own filter** (`build_searches()`). If the user checks "people",
+a normal search would count only people, and "history (7)" would disappear, so the user couldn't
+add it. Shops count each group **without its own checkboxes** (they are alternatives, OR), but
+**with** the other groups' checkboxes (AND). Example with "people" and "pdf" checked:
+
+| Search | Filter | Used for |
+| ------ | ------ | -------- |
+| main | people AND pdf | `results` + counts of fields with nothing checked (`attribution`) |
+| count 1 | only pdf | counts of `contentcategory` (`limit: 1`, the record is ignored) |
+| count 2 | only people | counts of `resourceformat` |
+
+All of them go to Meilisearch in **one** request (`/multi-search`), so it's 1 + one search per
+field with checked values. Without filters it's a single search, as before.
+
+Why `limit: 1` and not 0 for the count searches: with `limit: 0`, Meilisearch skips the meaning
+part of a hybrid search, and records that only match by meaning would be missing from the counts.
+With `limit: 1` (or more) it counts **all** matches, also far beyond the limit (tested with 45
+matches and `limit: 1`).
+
+All searches use the **same** threshold. If the main search finds nothing at 0.7, the whole set is
+re-run at 0.6. Meilisearch applies the threshold to hits and counts alike, so the counts always
+describe the results the user sees.
+
+Meilisearch leaves out values with 0 matches. A checked value can therefore be missing from
+`facets`; the UI must still show it (as 0) so the user can uncheck it.
 
 We use `MEILI_SEARCH_KEY`, a key that can **only search**. Even if search-api had a bug, it
 couldn't change the index.

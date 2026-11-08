@@ -93,6 +93,30 @@ def build_filter(filters):
     return " AND ".join(parts) or None
 
 
+def with_filter(query, filters):
+    """Copy of a Meilisearch query with the filter for `filters` added (none if empty)."""
+    search_filter = build_filter(filters)
+    return {**query, "filter": search_filter} if search_filter else dict(query)
+
+
+def build_searches(body, filters):
+    """The main search, plus one count-only search per field that has checked values.
+
+    Each count search uses every filter EXCEPT its own field's. So with "people" checked,
+    the category counts still show "history (7)": the values of one field are alternatives
+    (OR), and checking one mustn't hide the others. Other fields' filters still apply (AND).
+    Returns (searches, fields): searches[0] is the main one, searches[i + 1] counts fields[i].
+    """
+    searches = [with_filter({**body, "facets": FACET_FIELDS}, filters)]
+    fields = [field for field, values in filters.items() if values]
+    for field in fields:
+        other_filters = {f: v for f, v in filters.items() if f != field}
+        # limit 1, not 0: with limit 0 Meilisearch skips the meaning part of a hybrid search
+        # and counts keyword matches only (tested on 1.56). We only use the counts.
+        searches.append(with_filter({**body, "limit": 1, "facets": [field]}, other_filters))
+    return searches, fields
+
+
 def search_text(question, history):
     """Earlier questions + the new one, so 'Was she pardoned?' still finds Viola Desmond."""
     previous = [turn.question for turn in history[-2:]]
@@ -196,12 +220,17 @@ def health():
     return {"status": "ok"}
 
 
-async def meili_search(client, body, threshold):
-    """One Meilisearch search, keeping only hits that score at least `threshold`.
-    Returns Meilisearch's whole answer: "hits" and the facet counts ("facetDistribution")."""
+async def meili_search(client, searches, threshold):
+    """Run several searches in ONE request (Meilisearch /multi-search), all keeping only hits
+    that score at least `threshold`. Returns Meilisearch's answer for each search, in the
+    same order: "hits" and the facet counts ("facetDistribution")."""
+    queries = [
+        {**search, "indexUid": "records", "rankingScoreThreshold": threshold}
+        for search in searches
+    ]
     r = await client.post(
-        f"{MEILI_URL}/indexes/records/search",
-        json={**body, "rankingScoreThreshold": threshold},
+        f"{MEILI_URL}/multi-search",
+        json={"queries": queries},
         headers={"Authorization": f"Bearer {MEILI_SEARCH_KEY}"},
     )
     if r.status_code != 200:
@@ -209,7 +238,7 @@ async def meili_search(client, body, threshold):
         # only gets a generic error.
         logger.warning("Meilisearch error %s: %s", r.status_code, r.text[:500])
         raise HTTPException(status_code=502, detail="Search engine error")
-    return r.json()
+    return r.json()["results"]
 
 
 @app.post("/api/search")
@@ -220,22 +249,25 @@ async def search(req: SearchRequest, x_api_key: str = Header(default="")):
 
     # 2. Search Meilisearch (earlier questions help with "she", "it", etc.)
     #    Strict threshold first; if that finds nothing, one more try with the looser one.
+    #    Filters and counts: see build_searches().
     body = {
         "q": search_text(req.question, req.history),
         "hybrid": {"embedder": "default", "semanticRatio": SEMANTIC_RATIO},
         "limit": req.limit,
         "showRankingScore": True,
-        "facets": FACET_FIELDS,  # ask Meilisearch to count the values of these fields
     }
-    if search_filter := build_filter(req.filters):
-        body["filter"] = search_filter
+    searches, filtered_fields = build_searches(body, req.filters)
     async with httpx.AsyncClient(timeout=10) as client:
-        result = await meili_search(client, body, SCORE_THRESHOLD)
-        if not result["hits"] and FALLBACK_THRESHOLD < SCORE_THRESHOLD:
-            result = await meili_search(client, body, FALLBACK_THRESHOLD)
-    # Hits and counts always come from the same search, so they agree
-    hits = result["hits"]
-    facets = result.get("facetDistribution", {})
+        results = await meili_search(client, searches, SCORE_THRESHOLD)
+        if not results[0]["hits"] and FALLBACK_THRESHOLD < SCORE_THRESHOLD:
+            # The count searches are re-run too: hits and counts use the same threshold
+            results = await meili_search(client, searches, FALLBACK_THRESHOLD)
+    hits = results[0]["hits"]
+    # Counts of fields without checked values come from the main search; a field with
+    # checked values is counted by its own search (without its own filter)
+    facets = results[0].get("facetDistribution", {})
+    for field, result in zip(filtered_fields, results[1:]):
+        facets[field] = result.get("facetDistribution", {}).get(field, {})
 
     # 3. Summary: the request's choice, or the default (uses the filtered hits)
     provider = req.provider or SUMMARY_PROVIDER
