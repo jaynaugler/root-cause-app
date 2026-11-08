@@ -10,19 +10,40 @@
         result,
         number,
         anchorId,
-        children
+        children,
+        searchMode = false
     }: {
         result: SearchResult;
         number: number;
         anchorId: string;
         children?: Snippet;
+        searchMode?: boolean;
     } = $props();
 
     // Prefer the human-readable hosting page; fall back to the resource itself.
     let href = $derived(result.sitelink || result.link);
 </script>
 
-<Card.Root id={anchorId} class="mx-auto w-full aspect-[1.1/1] bg-card-bg scroll-mt-6">
+{#snippet goButton()}
+    {#if href}
+        <Button
+            class="inline-flex h-12 w-40 items-center justify-between overflow-hidden bg-card-btn p-0 text-white hover:bg-card-btn-hover {searchMode ? 'shrink-0 self-start' : 'mt-auto self-end'}"
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+        >
+            <img
+                src={GreenPattern}
+                alt="Pattern on button"
+                class="size-12 shrink-0 rounded-l-md object-cover"
+            />
+            <span class="px-3">Go!</span>
+            <ArrowRightIcon class="mx-3 size-5 shrink-0" aria-hidden="true" />
+        </Button>
+    {/if}
+{/snippet}
+
+<Card.Root id={anchorId} class="mx-auto w-full bg-card-bg scroll-mt-6 {searchMode ? '' : 'aspect-[1.1/1]'}">
     <Card.Header class="-mt-(--card-spacing) px-0">
         <Card.Title class="flex w-full items-start gap-2 bg-card-title text-left text-white text-xl px-(--card-spacing) py-5 rounded-t-xl">
             <span class="shrink-0">{number}.</span>
@@ -31,13 +52,13 @@
                     href={href}
                     target="_blank"
                     rel="noopener noreferrer"
-                    class="min-w-0 flex-1 line-clamp-2 hover:underline"
+                    class="min-w-0 flex-1 {searchMode ? '' : 'line-clamp-2'} hover:underline"
                     title={result.title ?? 'Untitled record'}
                 >
                     {result.title ?? 'Untitled record'}
                 </a>
             {:else}
-                <span class="min-w-0 flex-1 line-clamp-2" title={result.title ?? 'Untitled record'}>
+                <span class="min-w-0 flex-1 {searchMode ? '' : 'line-clamp-2'}" title={result.title ?? 'Untitled record'}>
                     {result.title ?? 'Untitled record'}
                 </span>
             {/if}
@@ -51,27 +72,30 @@
     </Card.Header>
 
     <Card.Content class="flex-1">
-        {#if result.description}
+        {#if searchMode}
+            <div class="flex items-start justify-between gap-4">
+                <div class="min-w-0">
+                    {#if result.description}
+                        <p class="text-sm">{result.description}</p>
+                    {/if}
+                </div>
+                {@render goButton()}
+            </div>
+        {:else if result.description}
             <p class="text-sm">{result.description}</p>
+        {/if}
+
+        {#if searchMode && result.summary}
+            <details class="rounded-lg border border-border/60 bg-background/50 p-3">
+                <summary class="cursor-pointer text-sm font-medium select-none">Stored summary</summary>
+                <p class="mt-3 text-sm leading-relaxed whitespace-pre-wrap">{result.summary}</p>
+            </details>
         {/if}
 
         {@render children?.()}
 
-        {#if href}
-            <Button
-                class="mt-auto self-end inline-flex h-12 w-40 items-center justify-between overflow-hidden bg-card-btn p-0 text-white hover:bg-card-btn-hover"
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-            >
-                <img
-                    src={GreenPattern}
-                    alt="Pattern on button"
-                    class="size-12 shrink-0 rounded-l-md object-cover"
-                />
-                <span class="px-3">Go!</span>
-                <ArrowRightIcon class="mx-3 size-5 shrink-0" aria-hidden="true" />
-            </Button>
-        {/if} 
+        {#if !searchMode}
+            {@render goButton()}
+        {/if}
     </Card.Content>
 </Card.Root>
