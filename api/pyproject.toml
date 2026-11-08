@@ -16,6 +16,7 @@ dependencies = [
 	"pypdfium2>=5.15.0",
 	"youtube-transcript-api>=1.2.5",
 	"feedparser>=6.0.14",
+	"psutil>=7.2.2",
 ]
 
 [dependency-groups]
@@ -29,3 +30,4 @@ line-length = 100
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+

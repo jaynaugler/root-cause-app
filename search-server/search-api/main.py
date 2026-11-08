@@ -6,11 +6,12 @@ import logging
 import os
 import re
 import secrets
+import time
 import unicodedata
 from typing import Annotated, Literal, get_args
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger("uvicorn.error")
@@ -280,6 +281,96 @@ async def summarize(question, hits, provider, history=()):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+AI_HEALTH_CACHE_SECONDS = 300
+AI_HEALTH_TIMEOUT_SECONDS = 20
+_ai_health_cache = None
+_ai_health_lock = asyncio.Lock()
+
+
+async def check_ollama_generation():
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": [{"role": "user", "content": "Reply with OK."}],
+        "stream": False,
+        "options": {"temperature": 0, "num_predict": 4},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=AI_HEALTH_TIMEOUT_SECONDS) as client:
+            response = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
+        response.raise_for_status()
+        text = response.json()["message"]["content"]
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("Ollama returned no generated text")
+    except Exception:
+        logger.warning("Ollama AI health check failed", exc_info=True)
+        return "unhealthy"
+    return "healthy"
+
+
+async def check_search_gemini_generation():
+    if not GEMINI_API_KEY:
+        return "not_configured"
+
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{GEMINI_MODEL}:generateContent"
+    )
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": "Reply with OK."}]}],
+        "generationConfig": {"maxOutputTokens": 4, "temperature": 0},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=AI_HEALTH_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                url,
+                json=payload,
+                headers={"x-goog-api-key": GEMINI_API_KEY},
+            )
+        response.raise_for_status()
+        parts = response.json()["candidates"][0]["content"]["parts"]
+        if not any(isinstance(part.get("text"), str) and part["text"].strip() for part in parts):
+            raise ValueError("Gemini returned no generated text")
+    except Exception:
+        logger.warning("Search Gemini health check failed", exc_info=True)
+        return "unhealthy"
+    return "healthy"
+
+
+async def check_ai_providers():
+    global _ai_health_cache
+    now = time.monotonic()
+    if _ai_health_cache and now - _ai_health_cache[0] < AI_HEALTH_CACHE_SECONDS:
+        return _ai_health_cache[1], _ai_health_cache[2]
+
+    async with _ai_health_lock:
+        now = time.monotonic()
+        if _ai_health_cache and now - _ai_health_cache[0] < AI_HEALTH_CACHE_SECONDS:
+            return _ai_health_cache[1], _ai_health_cache[2]
+        ollama, gemini = await asyncio.gather(
+            check_ollama_generation(),
+            check_search_gemini_generation(),
+        )
+        providers = {"ollama": ollama, "gemini": gemini}
+        checked_at = time.time()
+        _ai_health_cache = (time.monotonic(), providers, checked_at)
+        return providers, checked_at
+
+
+@app.get("/health/ai")
+async def ai_health(response: Response, x_api_key: str = Header(default="")):
+    """Run cached, minimal generation checks for the search summary providers."""
+    check_api_key(x_api_key)
+    providers, checked_at = await check_ai_providers()
+    is_healthy = all(value in {"healthy", "not_configured"} for value in providers.values())
+    if not is_healthy:
+        response.status_code = 503
+    return {
+        "status": "healthy" if is_healthy else "unhealthy",
+        "checked_at": checked_at,
+        "providers": providers,
+    }
 
 
 def check_api_key(x_api_key):
