@@ -1,15 +1,17 @@
 <script lang="ts">
 	import { applyAction, enhance, type SubmitFunction } from '$app/forms';
 	import { onMount, tick } from 'svelte';
-	import { Button } from '#lib/components/ui/button/index.js';
-	import { Input } from '#lib/components/ui/input/index.js';
 	import SearchSummary from '#lib/components/search/SearchSummary.svelte';
 	import ResultsCard from '#lib/components/resultsCard/ResultsCard.svelte';
 	import MagicBorder from '#lib/components/search/MagicBorder.svelte';
+	import SearchBox from '#lib/components/search/SearchBox.svelte';
 	import { MAX_HISTORY, type ThreadTurn } from '#lib/search.js';
-	import OrangePattern from '#lib/assets/OrangePattern.jpg';
 
 	let { data, form } = $props();
+	// Text of the main search box. Starts from `form` so a no-JS submit (full page reload) keeps the
+	// question; with JS the box is never cleared, so later `form` changes don't need copying in.
+	// svelte-ignore state_referenced_locally
+	let newQuestion = $state(form?.question ?? '');
 
 	type Mode = 'new' | 'followup';
 
@@ -37,7 +39,18 @@
 			// Storage blocked (private mode) or corrupt JSON: start empty, like before
 		}
 		restored = true;
+		// The thread is on screen and the list collapsed: drop the marker from the <svelte:head>
+		// script so the list shows again (after tick(), so both changes reach the screen together)
+		tick().then(() => delete document.documentElement.dataset.savedThread);
 	});
+
+	// Runs in the browser while the page is still loading, before anything is drawn. The server
+	// can't see sessionStorage, so it always sends "Recent records" open; if a thread is saved,
+	// this marks <html> so the CSS below hides the list until onMount has restored the thread.
+	// (Same trick sites use to avoid a flash of the wrong dark/light theme.)
+	// The closing tag is written with a backslash (<\/script>): the plain form, anywhere in this
+	// block (even in a comment), would end this component's own script block early.
+	const hideRecentsScript = `<script>try{if(sessionStorage.getItem(${JSON.stringify(STORAGE_KEY)}))document.documentElement.dataset.savedThread=''}catch(e){}<\/script>`;
 
 	// Save whenever the thread changes
 	$effect(() => {
@@ -54,19 +67,23 @@
 	// Which form the last error belongs to, so it shows under the right input
 	let errorFor = $state<Mode>('new');
 	let followUp = $state('');
-	let followUpInput = $state<HTMLInputElement | null>(null);
+	let followUpInput = $state<HTMLInputElement | HTMLTextAreaElement | null>(null);
 
-	// The "Recent records" browse list: open on a fresh visit, auto-collapses
-	// as soon as a search starts, then it's just a triangle the user can
-	// toggle (bind:open keeps manual opens/closes sticky while the thread lives).
+	// The "Recent records" browse list: open only while there are no results. It collapses as
+	// soon as a search starts, and when results appear without one (the thread restored after a
+	// refresh, or a no-JS answer). Then it's just a triangle the user can toggle (bind:open keeps
+	// manual opens/closes sticky while the thread lives).
 	// Driven by `turns`, not `visibleTurns`: a new search temporarily hides the
 	// thread and must NOT pop this open mid-search.
-	let recentsOpen = $state(true);
-	let threadHasTurns = $state(false); // so the reopen only fires on emptying, not every render
+	// Starts closed when the server already has an answer (no-JS submit), so it never renders open.
+	// svelte-ignore state_referenced_locally
+	let recentsOpen = $state(!form?.results);
+	let threadHasTurns = $state(false); // so open/close only fire on a change, not every render
 	$effect(() => {
-		if (turns.length) {
+		if (turns.length && !threadHasTurns) {
 			threadHasTurns = true;
-		} else if (threadHasTurns) {
+			recentsOpen = false;
+		} else if (!turns.length && threadHasTurns) {
 			threadHasTurns = false;
 			recentsOpen = true;
 		}
@@ -132,6 +149,11 @@
 	}
 </script>
 
+<svelte:head>
+	<!-- eslint-disable-next-line svelte/no-at-html-tags -- our own constant, no user input -->
+	{@html hideRecentsScript}
+</svelte:head>
+
 {#snippet errors(mode: Mode)}
 	{#if errorFor === mode && form?.errors?.question}
 		<p class="text-sm font-medium text-red-500">{form.errors.question[0]}</p>
@@ -142,39 +164,21 @@
 {/snippet}
 
 <main class="container mx-auto max-w-6xl px-4 pt-12 space-y-8">
-	<header class="space-y-4">
+	<!-- Narrow, centered column for the title + search box; results below keep the full width -->
+	<header class="mx-auto max-w-2xl space-y-4">
 		<h1 class="text-2xl font-semibold">Search the archive</h1>
 
 		<!-- New search: starts a fresh thread -->
 		<form method="POST" action="?/search" class="w-full space-y-2" use:enhance={submitTo('new')}>
-			<div class="flex gap-2">
-				<MagicBorder active={pending?.mode === 'new'} class="flex-1">
-					<Input
-						name="question"
-						placeholder="Ask a question, e.g. Who was Viola Desmond?"
-						value={form?.question ?? ''}
-						disabled={!!pending}
-					/>
-				</MagicBorder>
-				<Button
-					type="submit"
-					disabled={!!pending}
-					class="self-stretch inline-flex w-40 items-center justify-between overflow-hidden rounded-md bg-search-btn p-0 text-white hover:bg-search-btn-hover"
-				>
-					<img
-						src={OrangePattern}
-						alt=""
-						class="size-12 shrink-0 rounded-l-md object-cover"
-					/>
-					<span class="px-3">{pending?.mode === 'new' ? 'Searching…' : 'Search'}</span>
-				</Button>
-			</div>
+			<MagicBorder active={pending?.mode === 'new'} rounded="rounded-2xl">
+				<SearchBox bind:value={newQuestion} disabled={!!pending} />
+			</MagicBorder>
 			{@render errors('new')}
 		</form>
 	</header>
 
 	<!-- Browse list: open on a fresh visit; collapses on search, then it's a toggle -->
-	<details bind:open={recentsOpen} class="space-y-3">
+	<details bind:open={recentsOpen} class="recents space-y-3">
 		<summary class="cursor-pointer text-sm font-medium text-muted-foreground select-none">
 			Recent records
 		</summary>
@@ -238,34 +242,27 @@
 
 	<!-- Follow-up: only once there is something to follow up on. Sticky so it stays in reach. -->
 	{#if turns.length > 0}
-		<!-- Fades the content out above the bar so it reads as "pinned", not as more page -->
+		<!-- Fades the content out above the bar so it reads as "pinned", not as more page.
+		     Fades to the page's cream (bg-[#FBF7F2] in +layout.svelte), not white -->
 		<form
 			method="POST"
 			action="?/search"
-			class="sticky bottom-0 bg-linear-to-t from-background from-80% to-transparent pt-6 pb-4"
+			class="sticky bottom-0 bg-linear-to-t from-[#FBF7F2] from-80% to-transparent pt-6 pb-4"
 			use:enhance={submitTo('followup')}
 		>
 			<input type="hidden" name="history" value={historyJson} />
-			<!-- Light tinted panel so it doesn't read as another result card (temporary styling) -->
-			<div class="space-y-2 rounded-xl border bg-muted p-3 shadow-lg">
-				<label for="follow-up" class="block px-1 text-xs font-medium text-muted-foreground">
-					Follow-up question — uses the answers above as context
-				</label>
-				<div class="flex gap-2">
-					<MagicBorder active={pending?.mode === 'followup'} class="flex-1">
-						<Input
-							id="follow-up"
-							name="question"
-							placeholder="Ask a follow-up…"
-							bind:value={followUp}
-							bind:ref={followUpInput}
-							disabled={!!pending}
-						/>
-					</MagicBorder>
-					<Button type="submit" disabled={!!pending}>
-						{pending?.mode === 'followup' ? 'Asking…' : 'Ask'}
-					</Button>
-					</div>
+			<!-- Slim pill, same width as the search box at the top. The label is for screen readers. -->
+			<div class="mx-auto max-w-2xl space-y-2">
+				<MagicBorder active={pending?.mode === 'followup'} rounded="rounded-full">
+					<SearchBox
+						variant="pill"
+						placeholder="Ask a follow-up…"
+						label="Follow-up question — uses the answers above as context"
+						bind:value={followUp}
+						bind:ref={followUpInput}
+						disabled={!!pending}
+					/>
+				</MagicBorder>
 				{@render errors('followup')}
 			</div>
 		</form>
@@ -273,3 +270,10 @@
 		<div class="pb-12"></div>
 	{/if}
 </main>
+
+<style>
+	/* While a saved thread is being restored after a refresh (see hideRecentsScript) */
+	:global(html[data-saved-thread]) .recents {
+		display: none;
+	}
+</style>
