@@ -30,7 +30,7 @@
 
 		<!-- Heading and subtitle (sit on top of the pattern) -->
 		<div class="relative">
-			<h1 class="text-2xl font-extrabold tracking-wide text-[#2A1A10] sm:text-3xl md:text-5xl">
+			<h1 class="font-heading text-2xl tracking-wide text-[#2A1A10] sm:text-3xl md:text-5xl">
 				SHARE YOUR RECORDS
 			</h1>
 			<p

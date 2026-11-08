@@ -2,6 +2,7 @@
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
+	import pattern from '#lib/assets/backgroundPattern.webp';
 
 	type BrokenIssues = {
 		link_broken: boolean;
@@ -124,7 +125,31 @@
 	}
 </script>
 
-<main class="container mx-auto max-w-xl py-12 px-4 space-y-6">
+<svelte:head>
+	<title>Bad links · Black History Knowledge Hub</title>
+</svelte:head>
+
+<main>
+	<!-- Orange band with the pattern (same as the other pages) -->
+	<section class="relative overflow-hidden bg-[#FF8C4B] px-4 pb-28 pt-8 text-center md:pb-32 md:pt-12">
+		<div
+			class="absolute inset-0 opacity-40 mix-blend-multiply"
+			style="background-image: url({pattern}); background-size: auto 180px; background-repeat: repeat;"
+		></div>
+		<div class="relative">
+			<h1 class="font-heading text-2xl tracking-wide text-[#2A1A10] sm:text-3xl md:text-5xl">
+				BAD LINKS
+			</h1>
+			<p
+				class="mt-4 inline-block rounded-lg bg-[#FFC49B] px-3 py-1.5 text-sm font-semibold text-[#2A1A10] md:px-4 md:py-2 md:text-base"
+			>
+				Find records whose links no longer work
+			</p>
+		</div>
+	</section>
+
+	<!-- The existing card, overlapping the bottom of the band -->
+	<div class="relative mx-auto -mt-20 max-w-2xl space-y-6 px-3 pb-16 sm:px-4 md:-mt-24">
 	<Card.Root>
 		<Card.Header>
 			<Card.Title>Link Integrity Checker</Card.Title>
@@ -132,7 +157,7 @@
 		</Card.Header>
 		<Card.Content class="space-y-4">
 			<div class="flex flex-col gap-2">
-				<Button type="button" class="w-full" onclick={runScan} disabled={loading}>
+				<Button type="button" class="self-center bg-[#3F6B41] px-10 text-white hover:bg-[#335A35]" onclick={runScan} disabled={loading}>
 					{loading ? 'Scanning entire database…' : 'Start Integrity Scan'}
 				</Button>
 				{#if error}
@@ -250,4 +275,5 @@
 			{/if}
 		</Card.Content>
 	</Card.Root>
+	</div>
 </main>

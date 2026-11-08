@@ -16,6 +16,7 @@
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import UserIcon from '@lucide/svelte/icons/user';
 	import MailIcon from '@lucide/svelte/icons/mail';
+	import pattern from '#lib/assets/backgroundPattern.webp';
 
 	type Feed = { id: string; title: string; url: string };
 
@@ -332,7 +333,27 @@
 	<title>Submitted Requests · Black History Knowledge Hub</title>
 </svelte:head>
 
-<main class="container mx-auto max-w-4xl px-4 py-12 space-y-6">
+<main>
+	<!-- Orange band with the pattern (same as the other pages) -->
+	<section class="relative overflow-hidden bg-[#FF8C4B] px-4 pb-28 pt-8 text-center md:pb-32 md:pt-12">
+		<div
+			class="absolute inset-0 opacity-40 mix-blend-multiply"
+			style="background-image: url({pattern}); background-size: auto 180px; background-repeat: repeat;"
+		></div>
+		<div class="relative">
+			<h1 class="font-heading text-2xl tracking-wide text-[#2A1A10] sm:text-3xl md:text-5xl">
+				SUBMITTED REQUESTS
+			</h1>
+			<p
+				class="mt-4 inline-block rounded-lg bg-[#FFC49B] px-3 py-1.5 text-sm font-semibold text-[#2A1A10] md:px-4 md:py-2 md:text-base"
+			>
+				Review what organisations have sent before it goes into search
+			</p>
+		</div>
+	</section>
+
+	<!-- The existing cards, overlapping the bottom of the band -->
+	<div class="relative mx-auto -mt-20 max-w-4xl space-y-6 px-3 pb-16 sm:px-4 md:-mt-24">
 	<Card.Root class="border-orange-200/80 shadow-md">
 		<Card.Header>
 			<Card.Title class="text-lg font-bold text-[#2A1A10]">RSS & Atom feeds</Card.Title>
@@ -844,4 +865,5 @@
 			</div>
 		</Card.Content>
 	</Card.Root>
+	</div>
 </main>
