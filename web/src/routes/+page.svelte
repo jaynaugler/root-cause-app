@@ -110,16 +110,6 @@
 		)
 	);
 
-	function wallPageUrl(page: number) {
-		const params = new URLSearchParams();
-		for (const [key, value] of Object.entries(data.wall.filters)) {
-			if (value) params.set(key, value);
-		}
-		params.set('sort', data.wall.sort);
-		params.set('page', String(page));
-		return `/?${params.toString()}`;
-	}
-
 	// One submit handler for both forms; `mode` decides whether the answer replaces or extends the thread
 	// Scroll an element to the top of the screen (scroll-mt-6 on the target leaves a small gap)
 	function scrollToTop(id: string) {
@@ -205,57 +195,10 @@
 		</form>
 	</header>
 
-	<!-- MongoDB card-wall controls: never sent to the search API. -->
-	{#if !turns.length && !pending}
-		<form method="GET" action="/" class="space-y-3 rounded-xl border border-orange-200/70 bg-orange-50/30 p-4">
-			<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-				<label class="space-y-1 text-sm font-medium">
-					Type
-					<select name="resourceformat" value={data.wall.filters.resourceformat} class="block w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-						<option value="">All types</option>
-						{#each data.wall.options.resourceformat as option (option)}
-							<option value={option}>{option}</option>
-						{/each}
-					</select>
-				</label>
-				<label class="space-y-1 text-sm font-medium">
-					Category
-					<select name="contentcategory" value={data.wall.filters.contentcategory} class="block w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-						<option value="">All categories</option>
-						{#each data.wall.options.contentcategory as option (option)}
-							<option value={option}>{option}</option>
-						{/each}
-					</select>
-				</label>
-				<label class="space-y-1 text-sm font-medium">
-					Attribution
-					<select name="attribution" value={data.wall.filters.attribution} class="block w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-						<option value="">All attributions</option>
-						{#each data.wall.options.attribution as option (option)}
-							<option value={option}>{option}</option>
-						{/each}
-					</select>
-				</label>
-				<label class="space-y-1 text-sm font-medium">
-					Sort
-					<select name="sort" value={data.wall.sort} class="block w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-						<option value="newest">Newest first</option>
-						<option value="oldest">Oldest first</option>
-						<option value="title">Title A–Z</option>
-					</select>
-				</label>
-			</div>
-			<div class="flex items-center gap-2">
-				<Button type="submit">Apply</Button>
-				<Button type="button" variant="outline" href="/">Clear</Button>
-			</div>
-		</form>
-	{/if}
-
 	<!-- Browse list: open on a fresh visit; collapses on search, then it's a toggle -->
 	<details bind:open={recentsOpen} class="recents space-y-3">
 		<summary class="cursor-pointer text-sm font-medium text-muted-foreground select-none">
-			Browse records ({data.wall.total})
+			Recent records
 		</summary>
 		<div class="mt-3 space-y-3">
 			{#if data.defaultRecords.length}
@@ -264,26 +207,9 @@
 						<ResultsCard result={record} number={i + 1} anchorId={'default-' + i} />
 					{/each}
 				</div>
-				{#if data.wall.pageCount > 1}
-					<div class="flex items-center justify-center gap-3 pt-2 text-sm">
-						{#if data.wall.page > 1}
-							<Button variant="outline" href={wallPageUrl(data.wall.page - 1)}>Previous</Button>
-						{:else}
-							<Button variant="outline" disabled>Previous</Button>
-						{/if}
-						<span>Page {data.wall.page} of {data.wall.pageCount}</span>
-						{#if data.wall.page < data.wall.pageCount}
-							<Button variant="outline" href={wallPageUrl(data.wall.page + 1)}>Next</Button>
-						{:else}
-							<Button variant="outline" disabled>Next</Button>
-						{/if}
-					</div>
-				{/if}
 			{:else}
 				<p class="text-sm text-muted-foreground">
-					{Object.values(data.wall.filters).some(Boolean)
-							? 'No records match the current filters.'
-							: 'No records in the archive yet. You can add one on the'}
+					No records in the archive yet. You can add one on the
 					<a href="/submit" class="underline">submit page</a>.
 				</p>
 			{/if}
