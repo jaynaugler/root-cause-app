@@ -15,7 +15,10 @@ MEILI_URL = os.environ.get("MEILI_URL", "http://meilisearch:7700")
 MEILI_SEARCH_KEY = os.environ["MEILI_SEARCH_KEY"]
 API_KEY = os.environ["API_KEY"]
 SEMANTIC_RATIO = float(os.environ.get("SEMANTIC_RATIO", "0.5"))
-SCORE_THRESHOLD = float(os.environ.get("SCORE_THRESHOLD", "0.6"))
+SCORE_THRESHOLD = float(os.environ.get("SCORE_THRESHOLD", "0.7"))
+# Used only when SCORE_THRESHOLD finds nothing (e.g. questions in other words or in French,
+# which score lower). Set it equal to SCORE_THRESHOLD to turn the second try off.
+FALLBACK_THRESHOLD = float(os.environ.get("FALLBACK_THRESHOLD", "0.6"))
 
 # Summary settings
 SUMMARY_PROVIDER = os.environ.get("SUMMARY_PROVIDER", "ollama")
@@ -165,6 +168,18 @@ def health():
     return {"status": "ok"}
 
 
+async def meili_search(client, body, threshold):
+    """One Meilisearch search, keeping only hits that score at least `threshold`."""
+    r = await client.post(
+        f"{MEILI_URL}/indexes/records/search",
+        json={**body, "rankingScoreThreshold": threshold},
+        headers={"Authorization": f"Bearer {MEILI_SEARCH_KEY}"},
+    )
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail="Search engine error")
+    return r.json()["hits"]
+
+
 @app.post("/api/search")
 async def search(req: SearchRequest, x_api_key: str = Header(default="")):
     # 1. Check the API key
@@ -172,22 +187,17 @@ async def search(req: SearchRequest, x_api_key: str = Header(default="")):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     # 2. Search Meilisearch (earlier questions help with "she", "it", etc.)
+    #    Strict threshold first; if that finds nothing, one more try with the looser one.
     body = {
         "q": search_text(req.question, req.history),
         "hybrid": {"embedder": "default", "semanticRatio": SEMANTIC_RATIO},
         "limit": req.limit,
-        "rankingScoreThreshold": SCORE_THRESHOLD,
         "showRankingScore": True,
     }
     async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.post(
-            f"{MEILI_URL}/indexes/records/search",
-            json=body,
-            headers={"Authorization": f"Bearer {MEILI_SEARCH_KEY}"},
-        )
-    if r.status_code != 200:
-        raise HTTPException(status_code=502, detail="Search engine error")
-    hits = r.json()["hits"]
+        hits = await meili_search(client, body, SCORE_THRESHOLD)
+        if not hits and FALLBACK_THRESHOLD < SCORE_THRESHOLD:
+            hits = await meili_search(client, body, FALLBACK_THRESHOLD)
 
     # 3. Summary: the request's choice, or the default
     provider = req.provider or SUMMARY_PROVIDER
