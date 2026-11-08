@@ -3,20 +3,29 @@ import type { RequestHandler } from './$types';
 import { z } from 'zod';
 import { getResourceModel } from '#lib/server/resources.js';
 import { requireUserApi } from '#lib/server/guards.js';
-import { RESOURCE_CATEGORIES } from '#lib/server/resource-schema.js';
-import { MAX_DESCRIPTION_LENGTH, MIN_SUMMARY_LENGTH } from '#lib/server/resource-schema.js';
+import {
+	RESOURCE_CATEGORIES,
+	RESOURCE_FORMATS,
+	truncateTeaser,
+	MAX_DESCRIPTION_LENGTH,
+	MIN_SUMMARY_LENGTH
+} from '#lib/server/resource-schema.js';
 
 // Shape of the POST /api/pdf-metadata record, minus `details`/`raw` (UI-only,
 // must not reach Mongo) and `status`/`createdAt` (stamped by this handler —
 // a client never chooses its own approval status).
 const insertSchema = z.object({
 	title: z.string().nullish(),
+	name: z.string().max(150).nullish(),
+	email: z.string().email().max(255).nullish(),
 	link: z.string(),
 	sitelink: z.string().nullish(),
 	description: z.string().nullish(),
+	submittedDescription: z.string().nullish(),
+	submittedSummary: z.string().min(MIN_SUMMARY_LENGTH).max(2000).nullish(),
 	summary: z.string().nullish(),
 	attribution: z.string().nullish(),
-	resourceformat: z.literal('pdf'),
+	resourceformat: z.enum(RESOURCE_FORMATS),
 	contentcategory: z.enum(RESOURCE_CATEGORIES).nullish(),
 	imgurl: z.string().nullish(),
 	// Submissions (/submit) request pending review; a client claiming 'approved'
@@ -34,7 +43,7 @@ const insertSchema = z.object({
 function normalizeTexts(description: string | null, summary: string | null) {
 	if (description !== null && description.length > MAX_DESCRIPTION_LENGTH) {
 		const text = description;
-		return { description: text.slice(0, MAX_DESCRIPTION_LENGTH), summary: text.length >= MIN_SUMMARY_LENGTH ? text : null };
+		return { description: truncateTeaser(text), summary: text.length >= MIN_SUMMARY_LENGTH ? text : null };
 	}
 	if (summary !== null && summary.length < MIN_SUMMARY_LENGTH) return { description, summary: null };
 	return { description, summary };
@@ -60,6 +69,14 @@ export const POST: RequestHandler = async (event) => {
 			link: data.link,
 			sitelink: data.sitelink ?? null,
 			description,
+			...(data.status === 'pending'
+				? {
+						name: data.name ?? null,
+						email: data.email ?? null,
+						submittedDescription: data.submittedDescription ?? null,
+						submittedSummary: data.submittedSummary ?? null
+					}
+				: {}),
 			summary,
 			attribution: data.attribution ?? null,
 			resourceformat: data.resourceformat,

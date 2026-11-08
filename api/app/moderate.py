@@ -1,6 +1,5 @@
 """Curation moderation endpoints for reviewing, approving, and modifying submitted resources."""
 
-import logging
 from datetime import datetime
 from typing import Any
 
@@ -11,9 +10,6 @@ from pydantic import BaseModel, Field
 from pymongo.errors import PyMongoError
 
 from app.db import db
-from app.pdf import _REQUEST_SLOTS, PdfUrlIn, _run_pdf_metadata
-
-logger = logging.getLogger("uvicorn.error")
 
 router = APIRouter(tags=["moderate"])
 
@@ -26,6 +22,9 @@ class ModifySubmissionPayload(BaseModel):
     link: str | None = Field(default=None, max_length=2000)
     sitelink: str | None = Field(default=None, max_length=2000)
     description: str | None = Field(default=None, max_length=2000)
+    generated_description: str | None = Field(default=None, max_length=150)
+    submitted_summary: str | None = Field(default=None, min_length=250, max_length=2000)
+    summary: str | None = Field(default=None, min_length=250, max_length=2000)
     attachment_name: str | None = Field(default=None, max_length=300)
     attachment_url: str | None = Field(default=None, max_length=2000)
 
@@ -57,6 +56,10 @@ async def get_pending_resources(limit: int = 100):
                     "name": 1,
                     "email": 1,
                     "description": 1,
+                    "submittedDescription": 1,
+                    "submittedSummary": 1,
+                    "summary": 1,
+                    "resourceformat": 1,
                     "link": 1,
                     "sitelink": 1,
                     "attachmentName": 1,
@@ -96,7 +99,12 @@ async def get_pending_resources(limit: int = 100):
                 "id": str(doc["_id"]),
                 "name": doc.get("name"),
                 "email": doc.get("email"),
-                "description": doc.get("description"),
+                # Legacy pending records kept submitter text in description.
+                "description": doc.get("submittedDescription", doc.get("description")),
+                "generatedDescription": doc.get("description"),
+                "submittedSummary": doc.get("submittedSummary"),
+                "summary": doc.get("summary"),
+                "resourceformat": doc.get("resourceformat"),
                 "link": doc.get("link"),
                 "sitelink": doc.get("sitelink"),
                 "attachmentName": attachment_name,
@@ -111,7 +119,7 @@ async def get_pending_resources(limit: int = 100):
 
 @router.post("/moderate/approve/{doc_id}")
 async def approve_resource(doc_id: str):
-    """Approve a raw submission and execute the PDF extraction & AI pipeline on it."""
+    """Approve the reviewed record without rerunning extraction or AI cleanup."""
     oid = _parse_object_id(doc_id)
 
     doc = await coll.find_one({"_id": oid})
@@ -121,34 +129,20 @@ async def approve_resource(doc_id: str):
             detail="Submission not found.",
         )
 
-    # Determine document URL to process
-    doc_url = doc.get("link") or doc.get("attachmentUrl") or doc.get("fileUrl")
-
-    meta: dict[str, Any] = {}
-    if doc_url and str(doc_url).startswith(("http://", "https://")):
-        try:
-            async with _REQUEST_SLOTS:
-                meta = await _run_pdf_metadata(PdfUrlIn(url=doc_url))
-        except HTTPException:
-            raise
-        except Exception as exc:  # noqa: BLE001 — pipeline failure falls back gracefully
-            logger.warning("Pipeline execution encountered an error for doc %s: %s", doc_id, exc)
-
-    # Merge extracted metadata with submitter details as fallbacks
-    update_data: dict[str, Any] = {
-        "status": "approved",
-        "title": meta.get("title") or doc.get("name") or "Untitled Document",
-        "description": meta.get("description") or doc.get("description"),
-        "summary": meta.get("summary"),
-        "attribution": meta.get("attribution") or doc.get("name"),
-        "contentcategory": meta.get("contentcategory"),
-        "resourceformat": meta.get("resourceformat", "pdf"),
-    }
+    update_data = {"status": "approved"}
 
     try:
         await coll.update_one(
             {"_id": oid},
-            {"$set": update_data},
+            {
+                "$set": update_data,
+                "$unset": {
+                    "name": "",
+                    "email": "",
+                    "submittedDescription": "",
+                    "submittedSummary": "",
+                },
+            },
         )
     except PyMongoError as e:
         raise HTTPException(
@@ -158,12 +152,12 @@ async def approve_resource(doc_id: str):
 
     return {
         "success": True,
-        "message": "Submission approved and processed through the pipeline.",
+        "message": "Submission approved.",
         "record": {
             "id": str(oid),
-            "title": update_data["title"],
-            "contentcategory": update_data["contentcategory"],
-            "summary": update_data["summary"],
+            "title": doc.get("title") or doc.get("name") or "Untitled Document",
+            "contentcategory": doc.get("contentcategory"),
+            "summary": doc.get("summary"),
         },
     }
 
@@ -188,7 +182,13 @@ async def modify_pending_resource(doc_id: str, payload: ModifySubmissionPayload)
         else:
             update_fields[k] = v
 
-    # Normalize attachment field names if provided
+    # Normalize public metadata, submission-only, and attachment field names.
+    if "submitted_summary" in update_fields:
+        update_fields["submittedSummary"] = update_fields.pop("submitted_summary")
+    if "description" in update_fields:
+        update_fields["submittedDescription"] = update_fields.pop("description")
+    if "generated_description" in update_fields:
+        update_fields["description"] = update_fields.pop("generated_description")
     if "attachment_name" in update_fields:
         update_fields["attachmentName"] = update_fields.pop("attachment_name")
     if "attachment_url" in update_fields:
@@ -212,22 +212,27 @@ async def modify_pending_resource(doc_id: str, payload: ModifySubmissionPayload)
 
 
 @router.delete("/moderate/reject/{doc_id}")
-async def reject_and_delete_resource(doc_id: str):
-    """Reject and permanently remove a submission from the database."""
+async def reject_resource(doc_id: str):
+    """Exclude rejected feed entries; permanently delete other submission types."""
     oid = _parse_object_id(doc_id)
 
     try:
+        doc = await coll.find_one({"_id": oid}, {"resourceformat": 1})
+        if not doc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Submission not found.")
+        if doc.get("resourceformat") in ("article", "podcast"):
+            await coll.update_one({"_id": oid}, {"$set": {"status": "unapproved"}})
+            return {
+                "success": True,
+                "message": "Feed entry rejected; it will be excluded from future checks.",
+            }
         result = await coll.delete_one({"_id": oid})
     except PyMongoError as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database deletion failed: {e!s}",
+            detail=f"Database rejection failed: {e!s}",
         ) from e
 
     if result.deleted_count == 0:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Submission not found.",
-        )
-
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Submission not found.")
     return {"success": True, "message": "Submission rejected and removed."}

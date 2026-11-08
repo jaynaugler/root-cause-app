@@ -17,18 +17,29 @@
         anchorId: string;
         children?: Snippet;
     } = $props();
+
+    // Prefer the human-readable hosting page; fall back to the resource itself.
+    let href = $derived(result.sitelink || result.link);
 </script>
 
 <Card.Root id={anchorId} class="mx-auto w-full aspect-[1.1/1] bg-card-bg scroll-mt-6">
     <Card.Header class="-mt-(--card-spacing) px-0">
-        <Card.Title class="w-full bg-card-title text-left text-white text-xl px-(--card-spacing) py-5 rounded-t-xl">
-            {number}.
-            {#if result.link}
-                <a href={result.link} target="_blank" rel="noopener noreferrer" class="hover:underline">
+        <Card.Title class="flex w-full items-start gap-2 bg-card-title text-left text-white text-xl px-(--card-spacing) py-5 rounded-t-xl">
+            <span class="shrink-0">{number}.</span>
+            {#if href}
+                <a
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="min-w-0 flex-1 line-clamp-2 hover:underline"
+                    title={result.title ?? 'Untitled record'}
+                >
                     {result.title ?? 'Untitled record'}
                 </a>
             {:else}
-                {result.title ?? 'Untitled record'}
+                <span class="min-w-0 flex-1 line-clamp-2" title={result.title ?? 'Untitled record'}>
+                    {result.title ?? 'Untitled record'}
+                </span>
             {/if}
         </Card.Title>
 
@@ -46,10 +57,10 @@
 
         {@render children?.()}
 
-        {#if result.link}
+        {#if href}
             <Button
                 class="mt-auto self-end inline-flex h-12 w-40 items-center justify-between overflow-hidden bg-card-btn p-0 text-white hover:bg-card-btn-hover"
-                href={result.link}
+                href={href}
                 target="_blank"
                 rel="noopener noreferrer"
             >

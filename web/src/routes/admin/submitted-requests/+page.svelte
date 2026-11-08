@@ -17,11 +17,17 @@
 	import UserIcon from '@lucide/svelte/icons/user';
 	import MailIcon from '@lucide/svelte/icons/mail';
 
+	type Feed = { id: string; title: string; url: string };
+
 	type PendingSubmission = {
 		id: string;
 		name: string | null;
 		email: string | null;
 		description: string | null;
+		generatedDescription: string | null;
+		submittedSummary: string | null;
+		summary: string | null;
+		resourceformat: string | null;
 		link: string | null;
 		sitelink: string | null;
 		attachmentName: string | null;
@@ -44,10 +50,20 @@
 	let editLink = $state('');
 	let editSitelink = $state('');
 	let editDescription = $state('');
+	let editSubmittedSummary = $state('');
+	let editGeneratedDescription = $state('');
+	let editSummary = $state('');
 	let editAttachmentName = $state('');
 	let editAttachmentUrl = $state('');
 
 	let actionLoading = $state<string | null>(null);
+	const URL_PATTERN = /^https?:\/\/\S+$/;
+
+	let feeds = $state<Feed[]>([]);
+	let feedUrl = $state('');
+	let feedAdding = $state(false);
+	let feedChecking = $state(false);
+	let feedMessage = $state('');
 
 	function getDocumentUrl(item: PendingSubmission): string | null {
 		if (item.attachmentUrl) return item.attachmentUrl;
@@ -113,6 +129,9 @@
 		editLink = item.link ?? '';
 		editSitelink = item.sitelink ?? '';
 		editDescription = item.description ?? '';
+		editSubmittedSummary = item.submittedSummary ?? '';
+		editGeneratedDescription = item.generatedDescription ?? '';
+		editSummary = item.summary ?? '';
 		editAttachmentName = item.attachmentName ?? '';
 		editAttachmentUrl = item.attachmentUrl ?? '';
 	}
@@ -143,6 +162,22 @@
 			alert('Submission must have either a resource link or an attached document.');
 			return;
 		}
+		if (editLink.trim() && !URL_PATTERN.test(editLink.trim())) {
+			alert('Resource link must be a full URL starting with http:// or https://.');
+			return;
+		}
+		if (editSitelink.trim() && !URL_PATTERN.test(editSitelink.trim())) {
+			alert('Site link must be a full URL starting with http:// or https://.');
+			return;
+		}
+		if (editSubmittedSummary.trim() && editSubmittedSummary.trim().length < 250) {
+			alert('The submitter summary must contain at least 250 characters, or be left blank.');
+			return;
+		}
+		if (editSummary.trim() && editSummary.trim().length < 250) {
+			alert('The summary must contain at least 250 characters, or be left blank.');
+			return;
+		}
 
 		actionLoading = id;
 		try {
@@ -152,6 +187,9 @@
 				link: editLink.trim() || null,
 				sitelink: editSitelink.trim() || null,
 				description: editDescription.trim() || null,
+				submitted_summary: editSubmittedSummary.trim() || null,
+				generated_description: editGeneratedDescription.trim() || null,
+				summary: editSummary.trim() || null,
 				attachment_name: editAttachmentName.trim() || null,
 				attachment_url: editAttachmentUrl.trim() || null
 			};
@@ -175,6 +213,9 @@
 							link: payload.link,
 							sitelink: payload.sitelink,
 							description: payload.description,
+								submittedSummary: payload.submitted_summary,
+								generatedDescription: payload.generated_description,
+								summary: payload.summary,
 							attachmentName: payload.attachment_name,
 							attachmentUrl: payload.attachment_url
 						};
@@ -192,8 +233,11 @@
 
 	async function rejectItem(item: PendingSubmission) {
 		const label = item.attachmentName || item.name || 'this submission';
+		const isFeedEntry = item.resourceformat === 'article' || item.resourceformat === 'podcast';
 		const confirmed = confirm(
-			`Are you sure you want to permanently reject and remove "${label}" from the submission queue?`
+			isFeedEntry
+				? `Reject "${label}" and exclude it from future feed checks?`
+				: `Are you sure you want to permanently reject and remove "${label}" from the submission queue?`
 		);
 		if (!confirmed) return;
 
@@ -213,6 +257,58 @@
 		}
 	}
 
+	async function fetchFeeds() {
+		try {
+			const res = await fetch('/api/feeds');
+			if (res.ok) feeds = (await res.json()).feeds ?? [];
+		} catch {
+			feedMessage = 'Could not load RSS feeds.';
+		}
+	}
+
+	async function addFeed(event: SubmitEvent) {
+		event.preventDefault();
+		feedMessage = '';
+		if (!URL_PATTERN.test(feedUrl.trim())) {
+			feedMessage = 'Enter a full feed URL starting with http:// or https://.';
+			return;
+		}
+		feedAdding = true;
+		try {
+			const res = await fetch('/api/feeds', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ url: feedUrl.trim() })
+			});
+			const body = await res.json().catch(() => null);
+			if (!res.ok) throw new Error(body?.detail ?? 'Could not add that feed.');
+			feedUrl = '';
+			feedMessage = body.added ? 'Feed added.' : 'That feed is already listed.';
+			await fetchFeeds();
+		} catch (error) {
+			feedMessage = error instanceof Error ? error.message : 'Could not add that feed.';
+		} finally {
+			feedAdding = false;
+		}
+	}
+
+	async function checkFeeds() {
+		feedChecking = true;
+		feedMessage = '';
+		try {
+			const res = await fetch('/api/feeds/check', { method: 'POST' });
+			const body = await res.json().catch(() => null);
+			if (!res.ok) throw new Error(body?.detail ?? 'Feed check failed.');
+			feedMessage = `${body.inserted} added, ${body.duplicates} duplicates skipped across ${body.feedsChecked} feeds.`;
+			if (body.failed?.length) feedMessage += ` ${body.failed.length} entries or feeds failed.`;
+			await Promise.all([fetchQueue(), fetchFeeds()]);
+		} catch (error) {
+			feedMessage = error instanceof Error ? error.message : 'Feed check failed.';
+		} finally {
+			feedChecking = false;
+		}
+	}
+
 	function formatDate(dateStr: string | null): string {
 		if (!dateStr) return '—';
 		try {
@@ -228,6 +324,7 @@
 
 	onMount(() => {
 		fetchQueue();
+		fetchFeeds();
 	});
 </script>
 
@@ -236,6 +333,54 @@
 </svelte:head>
 
 <main class="container mx-auto max-w-4xl px-4 py-12 space-y-6">
+	<Card.Root class="border-orange-200/80 shadow-md">
+		<Card.Header>
+			<Card.Title class="text-lg font-bold text-[#2A1A10]">RSS & Atom feeds</Card.Title>
+			<Card.Description class="text-xs text-muted-foreground">
+				Add recent stories and podcast episodes to the pending queue. Existing links are skipped.
+			</Card.Description>
+		</Card.Header>
+		<Card.Content class="space-y-4">
+			<form class="flex flex-col gap-2 sm:flex-row" onsubmit={addFeed}>
+				<Input
+					type="url"
+					bind:value={feedUrl}
+					placeholder="https://example.com/feed.xml"
+					aria-label="RSS or Atom feed URL"
+					disabled={feedAdding}
+				/>
+				<Button type="submit" class="shrink-0 bg-orange-700 text-white hover:bg-orange-800" disabled={feedAdding}>
+					{feedAdding ? 'Adding…' : 'Add feed'}
+				</Button>
+			</form>
+			{#if feeds.length}
+				<ul class="space-y-2 rounded-lg border border-orange-100 bg-orange-50/30 p-3 text-xs">
+					{#each feeds as feed (feed.id)}
+						<li>
+							<p class="font-semibold text-foreground">{feed.title}</p>
+							<p class="break-all text-muted-foreground">{feed.url}</p>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+			<div class="flex flex-wrap items-center gap-3">
+				<Button
+					type="button"
+					variant="outline"
+					class="border-orange-200 text-xs hover:bg-orange-50"
+					onclick={checkFeeds}
+					disabled={feedChecking || !feeds.length}
+				>
+					<RefreshCwIcon class="size-3.5 {feedChecking ? 'animate-spin' : ''}" />
+					{feedChecking ? 'Checking feeds…' : 'Check recent stories'}
+				</Button>
+				{#if feedMessage}
+					<p class="text-xs text-muted-foreground" role="status">{feedMessage}</p>
+				{/if}
+			</div>
+		</Card.Content>
+	</Card.Root>
+
 	<Card.Root class="border-orange-200/80 shadow-md">
 		<Card.Header class="flex flex-row items-center justify-between border-b border-orange-100 pb-4">
 			<div class="space-y-1">
@@ -363,7 +508,7 @@
 										onclick={() => approveItem(item.id)}
 									>
 										<CheckIcon class="size-3.5" />
-										{actionLoading === item.id ? 'Running Pipeline…' : 'Approve & Process'}
+										{actionLoading === item.id ? 'Approving…' : 'Approve'}
 									</Button>
 								</div>
 							</div>
@@ -443,13 +588,45 @@
 								</div>
 							{/if}
 
-							<!-- SUBMITTER NOTES / DESCRIPTION -->
-							{#if item.description}
-								<div class="rounded-lg bg-muted/30 p-3 text-xs leading-relaxed border border-border/50">
-									<span class="font-bold text-muted-foreground uppercase text-[10px] block mb-1">
-										Submitter Notes & Description:
+							<!-- GENERATED PUBLIC METADATA -->
+							<div class="space-y-3 rounded-lg border border-orange-200/70 bg-orange-50/30 p-3 text-xs leading-relaxed">
+								<div>
+									<span class="mb-1 block text-[10px] font-bold uppercase text-muted-foreground">
+										Generated Description:
 									</span>
-									<p class="text-foreground whitespace-pre-wrap">{item.description}</p>
+									<p class="whitespace-pre-wrap text-foreground">
+										{item.generatedDescription || 'No generated description. Use Edit to add one.'}
+									</p>
+								</div>
+								<div>
+									<span class="mb-1 block text-[10px] font-bold uppercase text-muted-foreground">
+										Generated Summary:
+									</span>
+									<p class="whitespace-pre-wrap text-foreground">
+										{item.summary || 'No generated summary. Use Edit to add one before approving.'}
+									</p>
+								</div>
+							</div>
+
+							<!-- SUBMITTER NOTES / DESCRIPTION -->
+							{#if item.description || item.submittedSummary}
+								<div class="space-y-3 rounded-lg border border-border/50 bg-muted/30 p-3 text-xs leading-relaxed">
+									{#if item.description}
+										<div>
+											<span class="mb-1 block text-[10px] font-bold uppercase text-muted-foreground">
+												Submitter Notes & Description:
+											</span>
+											<p class="whitespace-pre-wrap text-foreground">{item.description}</p>
+										</div>
+									{/if}
+									{#if item.submittedSummary}
+										<div>
+											<span class="mb-1 block text-[10px] font-bold uppercase text-muted-foreground">
+												Submitter Summary:
+											</span>
+											<p class="whitespace-pre-wrap text-foreground">{item.submittedSummary}</p>
+										</div>
+									{/if}
 								</div>
 							{/if}
 
@@ -555,25 +732,25 @@
 
 									<!-- Resource Link -->
 									<div class="space-y-1">
-										<Label for={`link-${item.id}`} class="text-xs font-semibold">Resource Link (Optional if Document Attached)</Label>
+										<Label for={`link-${item.id}`} class="text-xs font-semibold">Resource link (optional if a document is attached)</Label>
 										<Input
 											id={`link-${item.id}`}
 											type="url"
 											class="bg-background text-xs"
 											bind:value={editLink}
-											placeholder="https://..."
+											placeholder="Direct link to the PDF, e.g. https://bccns.com/download/2468/"
 										/>
 									</div>
 
 									<!-- Site Link -->
 									<div class="space-y-1">
-										<Label for={`site-${item.id}`} class="text-xs font-semibold">Host Site Link</Label>
+										<Label for={`site-${item.id}`} class="text-xs font-semibold">Site link (optional)</Label>
 										<Input
 											id={`site-${item.id}`}
 											type="url"
 											class="bg-background text-xs"
 											bind:value={editSitelink}
-											placeholder="https://..."
+											placeholder="e.g. https://bccns.com/resources/"
 										/>
 									</div>
 
@@ -588,6 +765,53 @@
 											class="flex w-full rounded-md border border-input bg-background p-2 text-xs shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
 											bind:value={editDescription}
 											placeholder="User's explanation of what this record is..."
+										></textarea>
+									</div>
+
+									<!-- Submitter Summary -->
+									<div class="space-y-1 md:col-span-2">
+										<Label for={`submitted-summary-${item.id}`} class="text-xs font-semibold">
+											Submitter Summary
+										</Label>
+										<textarea
+											id={`submitted-summary-${item.id}`}
+											rows={5}
+											minlength={250}
+											maxlength={2000}
+											class="flex w-full rounded-md border border-input bg-background p-2 text-xs shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+											bind:value={editSubmittedSummary}
+											placeholder="Summary supplied by the submitter, if any..."
+										></textarea>
+									</div>
+
+									<!-- Generated Public Description -->
+									<div class="space-y-1 md:col-span-2">
+										<Label for={`generated-desc-${item.id}`} class="text-xs font-semibold">
+											Generated Description (Public)
+										</Label>
+										<textarea
+											id={`generated-desc-${item.id}`}
+											rows={2}
+											maxlength={150}
+											class="flex w-full rounded-md border border-input bg-background p-2 text-xs shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+											bind:value={editGeneratedDescription}
+											placeholder="Short description shown on the public resource card..."
+										></textarea>
+									</div>
+
+									<!-- Generated Public Summary -->
+									<div class="space-y-1 md:col-span-2">
+										<Label for={`summary-${item.id}`} class="text-xs font-semibold">
+											Generated Summary (Public)
+										</Label>
+										<textarea
+											id={`summary-${item.id}`}
+											rows={7}
+											minlength={250}
+											maxlength={2000}
+											class="flex w-full rounded-md border border-input bg-background p-2 text-xs shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+											bind:value={editSummary}
+											placeholder="At least 250 characters, or leave blank if the source cannot support a summary..."
 										></textarea>
 									</div>
 								</div>

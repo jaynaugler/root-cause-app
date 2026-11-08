@@ -9,7 +9,7 @@ const CATEGORIES = ['people', 'places', 'events', 'organizations', 'publications
 // 'unapproved' is not used yet: everything is inserted 'approved' for now.
 const STATUSES = ['pending', 'approved', 'unapproved'];
 
-// resourceformat: only 'pdf' exists today, fetched by api/app/pdf.py.
+// Keep resourceformat in sync with RESOURCE_FORMATS in resource-schema.ts.
 // description: capped at 150 chars (card teaser) — the insert flow must slice
 // longer raw text (fallback records with no Gemini summary) to stay valid.
 const RESOURCE_SCHEMA = {
@@ -28,15 +28,20 @@ const RESOURCE_SCHEMA = {
 	],
 	properties: {
 		_id: { bsonType: 'objectId' },
+		name: { bsonType: ['string', 'null'], maxLength: 150 },
+		email: { bsonType: ['string', 'null'], maxLength: 255 },
 		title: { bsonType: ['string', 'null'], maxLength: 300 },
 		link: { bsonType: 'string', pattern: '^https?://', maxLength: 2000 },
 		// Optional (curator-supplied): the site page hosting the resource.
 		sitelink: { bsonType: ['string', 'null'], pattern: '^https?://', maxLength: 2000 },
 		description: { bsonType: ['string', 'null'], maxLength: 150 },
+		// Optional submitter context for pending review; removed on approval.
+		submittedDescription: { bsonType: ['string', 'null'], maxLength: 150 },
+		submittedSummary: { bsonType: ['string', 'null'], minLength: 250, maxLength: 2000 },
 		// minLength applies to strings only; null (fallback records) is still valid.
 		summary: { bsonType: ['string', 'null'], minLength: 250 },
 		attribution: { bsonType: ['string', 'null'] },
-		resourceformat: { bsonType: 'string', enum: ['pdf'] },
+		resourceformat: { bsonType: 'string', enum: ['pdf', 'book', 'video', 'article', 'podcast'] },
 		contentcategory: { enum: [...CATEGORIES, null] },
 		imgurl: { bsonType: ['string', 'null'] },
 		status: { enum: STATUSES },

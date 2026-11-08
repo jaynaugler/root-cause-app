@@ -20,6 +20,7 @@ export interface SearchResult {
 	description?: string;
 	attribution?: string;
 	link?: string;
+	sitelink?: string;
 	resourceformat?: string; // e.g. "pdf", "website"
 	contentcategory?: string; // e.g. "history"
 	imgurl?: string | null;

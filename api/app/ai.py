@@ -9,6 +9,7 @@ falls back to the raw record — e.g. the "national historical person" upgrade
 of a source's "national hero" wording would be caught by the gate).
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -32,8 +33,8 @@ CATEGORIES = ["people", "places", "events", "organizations", "publications", "hi
 SYSTEM_PROMPT = (
 	"You clean metadata records for a Black history archive search hub. "
 	"Write the cleaned record as JSON matching the requested schema. "
-	"Use ONLY information contained in the provided data — if something is "
-	"missing, return null. Never invent names, dates, places, events or "
+	"Use ONLY information contained in the provided data. If a metadata fact "
+	"is missing, return null for that fact. Never invent names, dates, places, events or "
 	"facts. Use names, titles and designations exactly as the record words "
 	"them — never swap in a more official-sounding one you may recognize. "
 	"Keep the language of the text."
@@ -42,21 +43,36 @@ SYSTEM_PROMPT = (
 USER_INSTRUCTIONS = f"""Clean the record below.
 
 Rules:
-- title: use the record's metadata title if it is any good; otherwise take the
-  document's heading or first meaningful line of the text, minus generic labels
-  like 'info sheet' or 'fact sheet'. null if neither exists.
+- title: the SHORT main title only. A series name, organization banner, or
+  generic document type such as 'education guide' is not a good metadata title
+  when the document itself supplies a more specific heading; use that heading.
+  From the metadata title, drop everything after a colon/semicolon that is a
+  subtitle, series note, speech transcript
+  description or date qualifier — "Abolition Fanaticism in New York", not
+  "Abolition Fanaticism in New York: Speech of a Runaway Slave from Baltimore,
+  at an Abolition Meeting...". Keep a title's own quotation-marked or "Or,"
+  sections (they are the work's name). For records without a good metadata
+  title, take the document heading or first meaningful line of the text, minus
+  generic labels like 'info sheet'. null if neither exists.
 - description: at most 150 characters — the single most important line, with
   the key names and keywords a reader would associate with the document. This
-  is the card teaser; details go in the summary. No titles, no markdown.
-- summary: a full plain-text summary of the document, at least 250 characters
-  (3 or more sentences). If the document is too short to support that, return
-  null instead of padding. Repair
-  line-breaks and obvious OCR letter errors, and drop watermark, credit-line,
-  navigation and page-number junk. No titles, no markdown, no newlines.
-- attribution: the person or organization the resource comes from. Prefer the
-  document's own credit line — wording like "Source: X", "please credit: X",
-  "© X", "courtesy of X" — over the metadata author/creator, which may name
-  only the individual author. null if unknown.
+  is the card teaser; details go in the summary. Describe the work's CONTENT —
+  production metadata is never content: "E-text prepared by…", transcriber
+  notes, performance copyrights and hosting-site pages are the packaging, not
+  the work. No titles, no markdown.
+- summary: WRITE a full plain-text summary of the supplied document or transcript,
+  at least 250 characters (3 or more sentences). This is generated from the text,
+  not copied from metadata; never return null merely because no existing summary
+  was provided. Return null only when the supplied text is absent or genuinely
+  too short to support a summary; do not pad. Repair line-breaks and obvious OCR
+  letter errors, and drop watermark, credit-line, navigation and page-number junk.
+  No titles, no markdown, no newlines.
+- attribution: the AUTHOR or originating organization of the resource — never
+  the hosting platform or distributor (e.g. Project Gutenberg is the
+  distributor of an ebook, not its author → attribute the book's author).
+  When the resource itself carries a credit line ("Source: X", "please
+  credit: X", "© X"), prefer that over metadata author/creator. null if
+  the author is genuinely unknown.
 - contentcategory: pick exactly one of: {", ".join(CATEGORIES)}.
 
 Record:
@@ -72,7 +88,7 @@ RESPONSE_SCHEMA = {
 		"attribution": {"type": "STRING", "nullable": True},
 		"contentcategory": {"type": "STRING", "enum": CATEGORIES},
 	},
-	"required": ["title", "description", "attribution", "contentcategory"],
+	"required": ["title", "description", "summary", "attribution", "contentcategory"],
 }
 
 # Capitalized words that are grammar, not names — sentence starters included.
@@ -174,6 +190,19 @@ def _optional(value, cap: int = MAX_SUMMARY_CHARS) -> str | None:
 	return value[:cap] if value else None
 
 
+def _description(value) -> str | None:
+	"""Cap a card teaser at a sentence or word boundary, never mid-word."""
+	text = _optional(value)
+	if text is None or len(text) <= MAX_DESCRIPTION_CHARS:
+		return text
+	cut = text[:MAX_DESCRIPTION_CHARS]
+	sentence_end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+	if sentence_end >= MAX_DESCRIPTION_CHARS // 2:
+		return cut[: sentence_end + 1]
+	space = cut.rfind(" ")
+	return (cut[:space] if space > MAX_DESCRIPTION_CHARS // 2 else cut[:-1]) + "…"
+
+
 def _claims_problems(cleaned: dict, given_text: str) -> list[str]:
 	"""Gate every model-authored free-text field against what the model received."""
 	problems: list[str] = []
@@ -189,9 +218,17 @@ async def _generate(payload: dict) -> dict:
 		f"{settings.gemini_model}:generateContent"
 	)
 	async with httpx.AsyncClient(timeout=settings.gemini_timeout) as client:
-		resp = await client.post(
-			url, json=payload, headers={"x-goog-api-key": settings.gemini_api_key}
-		)
+		for attempt in range(3):
+			resp = await client.post(
+				url, json=payload, headers={"x-goog-api-key": settings.gemini_api_key}
+			)
+			if resp.status_code not in {429, 500, 502, 503, 504}:
+				break
+			if attempt == 2:
+				break
+			# AI Studio occasionally returns transient high-demand 503s. Keep the
+			# existing raw-record fallback, but don't give up on the first one.
+			await asyncio.sleep(2**attempt)
 	resp.raise_for_status()
 	parts = resp.json()["candidates"][0]["content"]["parts"]
 	cleaned = json.loads("".join(part.get("text", "") for part in parts))
@@ -259,7 +296,7 @@ async def clean_record(fields: dict) -> dict:
 	summary = _optional(cleaned.get("summary"))
 	return {
 		"title": _optional(cleaned.get("title")),
-		"description": _optional(cleaned.get("description"), MAX_DESCRIPTION_CHARS),
+		"description": _description(cleaned.get("description")),
 		# Enforce the schema's bar here as well: a too-short summary inserts as
 		# null (description + link stay searchable) instead of failing validation.
 		"summary": summary if summary and len(summary) >= MIN_SUMMARY_CHARS else None,

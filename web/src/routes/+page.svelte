@@ -7,6 +7,7 @@
 	import SearchBox from '#lib/components/search/SearchBox.svelte';
 	import FilterBar from '#lib/components/search/FilterBar.svelte';
 	import FacetPanel from '#lib/components/search/FacetPanel.svelte';
+	import { Button } from '#lib/components/ui/button/index.js';
 	import {
 		FACET_FIELDS,
 		MAX_HISTORY,
@@ -385,6 +386,26 @@
 		document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 	}
 
+	// "Reset search": start over, as on a fresh visit. The filters go too: otherwise the pills
+	// would jump back to whatever was set before the first question.
+	function resetSearch() {
+		if (pending) return;
+		stopRefining(); // a filter update still running for the answer
+		clearTimeout(browseTimer); // a browse update still waiting or running
+		browseController?.abort();
+		browseLoading = false;
+		browseError = '';
+		browseStatus = '';
+		browseFilters = {};
+		browseResult = null; // back to the list the page was loaded with
+		thread = [];
+		form = null;
+		newQuestion = '';
+		followUp = '';
+		recentsOpen = true;
+		tick().then(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+	}
+
 	function submitTo(mode: Mode): SubmitFunction {
 		return ({ formData }) => {
 			stopRefining();
@@ -458,7 +479,14 @@
 <main class="container mx-auto max-w-6xl px-4 pt-12 space-y-8">
 	<!-- Title + search box, as wide as the answers below -->
 	<header class="space-y-4">
-		<h1 class="text-2xl font-semibold">Search the archive</h1>
+		<div class="flex items-center justify-between gap-4">
+			<h1 class="text-2xl font-semibold">Search the archive</h1>
+			{#if turns.length || newQuestion || followUp || form || browseFiltered}
+				<Button type="button" variant="outline" size="sm" onclick={resetSearch} disabled={!!pending}>
+					Reset search
+				</Button>
+			{/if}
+		</div>
 
 		<!-- New search: starts a fresh thread -->
 		<form method="POST" action="?/search" class="w-full space-y-2" use:enhance={submitTo('new')}>
