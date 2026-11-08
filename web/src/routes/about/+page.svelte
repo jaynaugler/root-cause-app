@@ -2,6 +2,8 @@
 	import * as Card from '#lib/components/ui/card/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import pattern from '#lib/assets/backgroundPattern.webp';
+	import searchShot from '#lib/assets/about_search.png';
+	import centrePhoto from '#lib/assets/about_center_web.jpg';
 </script>
 
 <svelte:head>
@@ -41,13 +43,14 @@
 				</p>
 			</div>
 
-			<!-- IMAGE PLACEHOLDER 1: e.g. a screenshot of a search + its answer -->
-			<figure class="rounded-2xl border-2 border-dashed border-[#D2CBBD] bg-[#F7F5ED] p-4">
-				<div
-					class="flex aspect-[4/3] items-center justify-center rounded-xl bg-[#FFC49B]/40 p-4 text-center text-sm font-medium text-[#6B6458]"
-				>
-					Image placeholder — e.g. a screenshot of the search page with a question and answer
-				</div>
+			<!-- The hub at work: a search screenshot (about_search) -->
+			<figure class="overflow-hidden rounded-2xl border border-[#D2CBBD] bg-white shadow-sm">
+				<img
+					src={searchShot}
+					alt="The search page: someone asks “Tell me about Viola Desmond”, and the hub answers with a short summary drawn from the records"
+					class="aspect-[4/3] w-full object-cover"
+					loading="lazy"
+				/>
 			</figure>
 		</div>
 	</section>
@@ -92,13 +95,14 @@
 	<!-- Community / contribute + image placeholder -->
 	<section class="mx-auto max-w-6xl px-4 pb-16">
 		<div class="grid items-center gap-8 md:grid-cols-2">
-			<!-- IMAGE PLACEHOLDER 2: e.g. an archive photo, the Centre, or volunteers at work -->
-			<figure class="rounded-2xl border-2 border-dashed border-[#D2CBBD] bg-[#F7F5ED] p-4 md:order-last">
-				<div
-					class="flex aspect-[4/3] items-center justify-center rounded-xl bg-[#FFC49B]/40 p-4 text-center text-sm font-medium text-[#6B6458]"
-				>
-					Image placeholder — e.g. an archive photo or the Black Cultural Centre
-				</div>
+			<!-- The Centre itself (about_center_web, web-sized from about_center.jpg) -->
+			<figure class="overflow-hidden rounded-2xl border border-[#D2CBBD] bg-white shadow-sm md:order-last">
+				<img
+					src={centrePhoto}
+					alt="Inside the Black Cultural Centre: colourful exhibition banners of Nova Scotian community figures above a floor map of the province"
+					class="h-auto w-full"
+					loading="lazy"
+				/>
 			</figure>
 
 			<div class="space-y-4">
