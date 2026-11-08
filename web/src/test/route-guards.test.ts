@@ -46,11 +46,11 @@ describe('POST /resources', () => {
 		await (await getResourceModel()).deleteMany({});
 	});
 
-	function postAs(user: SessionUser | null) {
+	function postAs(user: SessionUser | null, overrides: Record<string, unknown> = {}) {
 		const request = new Request('http://localhost/resources', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify(record)
+			body: JSON.stringify({ ...record, ...overrides })
 		});
 		return saveResource({ locals: { user }, request } as AnyEvent);
 	}
@@ -69,5 +69,19 @@ describe('POST /resources', () => {
 		expect(response.status).toBe(201);
 		const Resource = await getResourceModel();
 		expect(await Resource.countDocuments({ link: record.link })).toBe(1);
+	});
+
+	it('keeps optional submitter notes separate from the generated description', async () => {
+		const response = await postAs(bob, {
+			description: 'Generated resource description',
+			submittedDescription: 'Context for the review team',
+			status: 'pending'
+		});
+
+		expect(response.status).toBe(201);
+		const Resource = await getResourceModel();
+		const saved = await Resource.findOne({ link: record.link }).lean();
+		expect(saved?.description).toBe('Generated resource description');
+		expect(saved?.submittedDescription).toBe('Context for the review team');
 	});
 });

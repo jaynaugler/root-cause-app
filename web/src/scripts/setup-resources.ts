@@ -9,7 +9,7 @@ const CATEGORIES = ['people', 'places', 'events', 'organizations', 'publications
 // 'unapproved' is not used yet: everything is inserted 'approved' for now.
 const STATUSES = ['pending', 'approved', 'unapproved'];
 
-// resourceformat: 'pdf' (api/app/pdf.py) and 'book' (api/app/book.py).
+// resourceformat: 'pdf' (api/app/pdf.py), 'book' (book.py), and 'video' (video.py).
 // description: capped at 150 chars (card teaser) — the insert flow must slice
 // longer raw text (fallback records with no Gemini summary) to stay valid.
 const RESOURCE_SCHEMA = {
@@ -33,10 +33,12 @@ const RESOURCE_SCHEMA = {
 		// Optional (curator-supplied): the site page hosting the resource.
 		sitelink: { bsonType: ['string', 'null'], pattern: '^https?://', maxLength: 2000 },
 		description: { bsonType: ['string', 'null'], maxLength: 150 },
+		// Optional submitter context for pending review; removed on approval.
+		submittedDescription: { bsonType: ['string', 'null'], maxLength: 150 },
 		// minLength applies to strings only; null (fallback records) is still valid.
 		summary: { bsonType: ['string', 'null'], minLength: 250 },
 		attribution: { bsonType: ['string', 'null'] },
-		resourceformat: { bsonType: 'string', enum: ['pdf', 'book'] },
+		resourceformat: { bsonType: 'string', enum: ['pdf', 'book', 'video'] },
 		contentcategory: { enum: [...CATEGORIES, null] },
 		imgurl: { bsonType: ['string', 'null'] },
 		status: { enum: STATUSES },

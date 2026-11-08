@@ -15,7 +15,7 @@
 	let summary = $state('');
 	let files: FileList | undefined = $state();
 
-	let errors = $state({ name: '', email: '', link: '', siteLink: '', description: '', summary: '' });
+	let errors = $state({ name: '', email: '', link: '', siteLink: '', summary: '' });
 	let sent = $state(false);
 	let submitting = $state(false);
 	let apiError = $state('');
@@ -36,20 +36,20 @@
 			email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) ? '' : 'Enter a valid email, like name@example.com',
 			link: URL_PATTERN.test(link.trim()) ? '' : 'Enter a full link, starting with https://',
 			siteLink: !siteLink.trim() || URL_PATTERN.test(siteLink.trim()) ? '' : 'Enter a full site link, starting with https://',
-			description: description.trim() ? '' : 'Describe what this link is.',
 			summary:
 				!summary.trim() || summary.trim().length >= MIN_SUMMARY
 					? ''
 					: `Write at least ${MIN_SUMMARY} characters, or leave this blank to use the extracted summary.`
 		};
 
-		if (errors.name || errors.email || errors.link || errors.siteLink || errors.description || errors.summary) return;
+		if (errors.name || errors.email || errors.link || errors.siteLink || errors.summary) return;
 
-		// Gutenberg ebooks go through their own pipeline; everything else is
-		// treated as a PDF document. Both share the AI-clean + gate + insert path.
+		// Each source has its own extractor; all share the AI-clean + insert path.
 		const endpoint = /gutenberg/i.test(link.trim())
 			? 'api/book-metadata'
-			: 'api/pdf-metadata';
+			: /(?:youtube\.com|youtu\.be)/i.test(link.trim())
+				? 'api/video-metadata'
+				: 'api/pdf-metadata';
 		submitting = true;
 		apiError = '';
 		try {
@@ -61,7 +61,7 @@
 			const meta = await metaRes.json().catch(() => null);
 			if (!metaRes.ok) {
 				const detail = (meta as { detail?: string } | null)?.detail;
-				throw new Error(detail ?? `Could not read that PDF (status ${metaRes.status}).`);
+				throw new Error(detail ?? `Could not read that resource (status ${metaRes.status}).`);
 			}
 
 			const saveRes = await fetch('/resources', {
@@ -71,7 +71,7 @@
 				body: JSON.stringify({
 					...meta,
 					sitelink: siteLink.trim() || null,
-					description: description.trim(),
+					submittedDescription: description.trim() || null,
 					summary:
 						summary.trim() ||
 						meta.summary ||
@@ -149,7 +149,7 @@
 			{:else}
 				<Card.Header>
 					<Card.Title class="text-2xl">Submit a request</Card.Title>
-					<Card.Description>Image upload, site link, and summary are optional. Everything else is required.</Card.Description>
+					<Card.Description>Image upload, site link, description, and summary are optional. Everything else is required.</Card.Description>
 				</Card.Header>
 
 				<Card.Content>
@@ -201,8 +201,8 @@
 								aria-describedby={`link-help ${errors.link ? 'link-error' : ''}`}
 							/>
 							<p id="link-help" class="text-sm text-muted-foreground">
-								A direct link to a PDF document, or a Project Gutenberg ebook page
-								(https://www.gutenberg.org/ebooks/…).
+								A direct link to a PDF, a Project Gutenberg ebook page, or a YouTube video
+								with a public transcript.
 							</p>
 							{#if errors.link}
 								<p id="link-error" class="text-sm font-medium text-[#A84A42]">{errors.link}</p>
@@ -232,28 +232,22 @@
 
 						<!-- Description -->
 						<div class="space-y-2">
-							<Label for="description">Description</Label>
+							<Label for="description">Description <span class="text-muted-foreground">(optional)</span></Label>
 							<textarea
 								id="description"
 								name="description"
 								rows="5"
 								maxlength={MAX_DESCRIPTION}
 								bind:value={description}
-								aria-invalid={errors.description ? 'true' : undefined}
-								aria-describedby="description-help {errors.description ? 'description-error' : ''}"
+								aria-describedby="description-help"
 								class="w-full rounded-md border border-input bg-white px-3 py-2 text-base shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-sm"
 							></textarea>
 							<div class="flex justify-between gap-4 text-sm">
 								<p id="description-help" class="text-muted-foreground">
-									What is it, and what time period or community does it cover?
+									Add context for the review team. The public record will use the generated description.
 								</p>
 								<p class="shrink-0 text-muted-foreground">{description.length}/{MAX_DESCRIPTION}</p>
 							</div>
-							{#if errors.description}
-								<p id="description-error" class="text-sm font-medium text-[#A84A42]">
-									{errors.description}
-								</p>
-							{/if}
 						</div>
 
 						<!-- Summary -->
