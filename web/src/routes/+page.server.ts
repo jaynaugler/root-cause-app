@@ -2,8 +2,10 @@ import { SEARCH_API_URL, SEARCH_API_KEY } from '$app/env/private';
 import { fail } from '@sveltejs/kit';
 import { z } from 'zod';
 import {
+	FACET_FIELDS,
 	MAX_HISTORY,
 	MAX_SUMMARY_CHARS,
+	type Filters,
 	type HistoryTurn,
 	type SearchResponse,
 	type ThreadTurn
@@ -41,7 +43,25 @@ function parseHistory(raw: FormDataEntryValue | null): HistoryTurn[] {
 	} catch {
 		return [];
 	}
-} 
+}
+
+// Checked filter values arrive as repeated form fields, the normal HTML way for checkboxes:
+// <input type="checkbox" name="contentcategory" value="people"> → contentcategory=people.
+// Same limits as SearchRequest.filters in search-api/main.py. Values are not trimmed: they must
+// match the stored values exactly.
+const filterValuesSchema = z.array(z.string().min(1).max(200)).max(20);
+
+// Unknown fields are ignored (only FACET_FIELDS are read). A field with invalid values is
+// dropped instead of failing the search, like a malformed history.
+function parseFilters(data: FormData): Filters {
+	const filters: Filters = {};
+	for (const field of FACET_FIELDS) {
+		const values = [...new Set(data.getAll(field).filter((v) => typeof v === 'string'))];
+		const parsed = filterValuesSchema.safeParse(values);
+		if (parsed.success && parsed.data.length) filters[field] = parsed.data;
+	}
+	return filters;
+}
 
 export const actions: Actions = {
 	search: async ({ request, fetch }) => {
@@ -58,6 +78,7 @@ export const actions: Actions = {
 		}
 		const { question } = parsed.data;
 		const history = parseHistory(data.get('history'));
+		const filters = parseFilters(data);
 
 		if (!SEARCH_API_URL || !SEARCH_API_KEY) {
 			return fail(500, { question, message: 'Search is not configured (SEARCH_API_URL / SEARCH_API_KEY).' });
@@ -69,7 +90,7 @@ export const actions: Actions = {
 			response = await fetch(`${SEARCH_API_URL}/api/search`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json', 'X-API-Key': SEARCH_API_KEY },
-				body: JSON.stringify({ question, history }),
+				body: JSON.stringify({ question, history, filters }),
 				// Summaries from Ollama can take a while
 				signal: AbortSignal.timeout(90_000)
 			});
@@ -84,8 +105,9 @@ export const actions: Actions = {
 		}
 
 		// 3. Return to the page (available as the `form` prop)
+		// The answer includes `facets` (the counts for the checkboxes)
 		const result = (await response.json()) as SearchResponse;
-		const turn: ThreadTurn = { question, ...result };
+		const turn: ThreadTurn = { question, filters, ...result };
 		return turn;
 	}
 };
