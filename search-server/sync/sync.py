@@ -1,7 +1,7 @@
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 from pymongo import MongoClient
@@ -45,6 +45,14 @@ def to_meili(doc):
     record["contentcategory"] = record["contentcategory"] or "uncategorized"
     created = doc.get("createdAt")
     record["createdAt"] = created.isoformat() if isinstance(created, datetime) else created
+    # The same moment as a number (milliseconds since 1970), for "newest first" in browsing.
+    # Meilisearch sorts numbers reliably; text dates only if every one has the same format.
+    # pymongo returns UTC dates without a timezone, so mark them as UTC before converting.
+    record["createdAtTs"] = (
+        int(created.replace(tzinfo=created.tzinfo or timezone.utc).timestamp() * 1000)
+        if isinstance(created, datetime)
+        else None
+    )
     return record
 
 
