@@ -1,9 +1,13 @@
 # How a search works (`search-api/main.py`)
 
-`main.py` is one small FastAPI app (about 200 lines) with two endpoints:
+`main.py` is one small FastAPI app with four endpoints:
 
 - `GET /health` returns `{"status": "ok"}`. It's used to check that the service is alive.
 - `POST /api/search` is the real work, described below.
+- `POST /api/browse` lists the newest records without a question, see
+  [Browsing](#browsing-post-apibrowse).
+- `POST /api/facets` lists the values of one field for a filter panel, see
+  [Filter panels](#filter-panels-post-apifacets).
 
 ## Quick reference
 
@@ -45,6 +49,7 @@ Content-Type: application/json
       "resourceformat": "pdf", "contentcategory": "history", "imgurl": null,
       "createdAt": "…", "_rankingScore": 0.83 }
   ],
+  "total": 14,
   "facets": {
     "contentcategory": { "people": 12, "history": 7, "uncategorized": 24 },
     "attribution": { "Black Cultural Centre for Nova Scotia": 43 },
@@ -56,6 +61,8 @@ Content-Type: application/json
 - `summary` is `null` when nothing was found, or when both AI providers failed. The `results` are
   still returned in that case.
 - `provider` is the AI that **actually** answered. It can differ from the one asked for (see fallback).
+- `total` is how many records match the question and the filters, not only the `limit` shown.
+  It is exact up to 1000 and stops there (see [why](#filters-and-counts-facets)).
 - `facets` counts **all** matching records per value, not only the `limit` shown.
 
 **Errors:** `401` wrong key · `422` request breaks a rule above · `502` Meilisearch failed.
@@ -69,12 +76,12 @@ POST /api/search
    ├─ 2. build search text: last 2 earlier questions + new question
    ├─ 3. Meilisearch hybrid search (keywords + meaning, + filters, as one /multi-search) ── error → 502
    │       → hits with score ≥ 0.7 (nothing? again with ≥ 0.6), at most `limit`
-   │       → counts per filter value (facets)
+   │       → counts per filter value (facets) and the total
    ├─ 4. no hits, or "summary": false? → summary = null, skip to 6
    ├─ 5. build prompt (history + top 5 hits + question)
    │       → Gemini (if chosen) ──fails──► Ollama ──fails──► summary = null
    │       → trim answer to 2000 characters
-   └─ 6. return { summary, provider, results, facets }
+   └─ 6. return { summary, provider, results, total, facets }
 ```
 
 ### 0. Validation, before our code even runs
@@ -163,13 +170,14 @@ add it. Shops count each group **without its own checkboxes** (they are alternat
 | Search | Filter | Used for |
 | ------ | ------ | -------- |
 | main | people AND pdf | `results` only (`limit` from the request, e.g. 8) |
-| count 1 | people AND pdf | counts of fields with nothing checked (`attribution`) |
+| count 1 | people AND pdf | counts of fields with nothing checked (`attribution`), and `total` |
 | count 2 | only pdf | counts of `contentcategory` |
 | count 3 | only people | counts of `resourceformat` |
 
 All of them go to Meilisearch in **one** request (`/multi-search`): the main search, one count
-search for the fields with nothing checked, and one per field with checked values. Without
-filters that's 2 searches.
+search with all filters, and one per field with checked values. Without filters that's 2
+searches. The count search with all filters is **always** sent, even when every field has checked
+values (then it counts no field). Its number of hits is `total` (`total()` in the code).
 
 **Why counts never come from the main search, and why the count searches use `limit: 1000`:**
 Meilisearch applies the score threshold only to records it actually *ranks*, and it stops
@@ -188,7 +196,7 @@ Not `limit: 0`: that makes Meilisearch skip the meaning half of a hybrid search,
 only match by meaning would be missing.
 
 All searches use the **same** threshold. If the main search finds nothing at 0.7, the whole set is
-re-run at 0.6. Meilisearch applies the threshold to hits and counts alike, so the counts always
+re-run at 0.6 (`run_with_fallback()`). Meilisearch applies the threshold to hits and counts alike, so the counts always
 describe the results the user sees.
 
 Meilisearch leaves out values with 0 matches. A checked value can therefore be missing from
@@ -244,8 +252,120 @@ always agree. Normal answers are a few hundred characters, so this is just a saf
 
 ### 6. Return
 
-We return the summary, which provider actually answered, and the raw Meilisearch hits. The web
+We return the summary, which provider actually answered, the raw Meilisearch hits, the total
+and the counts. The web
 app shows the answer on top and the records below it.
+
+## Browsing: `POST /api/browse`
+
+The search page shows the archive **before** any question: the newest records, with filter pills
+and counts for the whole archive. Clicking a pill filters the list right away.
+
+```http
+POST /api/browse
+X-API-Key: <API_KEY>
+Content-Type: application/json
+
+{ "limit": 12, "filters": { "contentcategory": ["people"] } }
+```
+
+| Field     | Required | Rules                    | Meaning                         |
+| --------- | -------- | ------------------------ | ------------------------------- |
+| `limit`   | no       | 1–50, default 12         | How many records to return      |
+| `filters` | no       | same as in `/api/search` | Only records with these values  |
+
+The response has `results`, `total` and `facets`, in the same shape as `/api/search`, but no
+`summary`.
+
+How it differs from a search:
+
+- **No question:** Meilisearch's *placeholder search* (`"q": ""`) returns every record that passes
+  the filters. So there's no AI, no embedding and no score threshold, and the counts are simply
+  exact.
+- **Sorted newest first** by `createdAtTs` (a number written by sync). The field must be sortable
+  in Meilisearch, see [setup](setup.md#allow-sorting-by-date-browsing).
+- **Counting** is the same as for a search (`build_searches()`): each field without its own
+  filter, so checking "people" keeps "history (7)" visible.
+- Only approved records are in Meilisearch at all (`APPROVED_ONLY=true` in sync).
+
+## Filter panels: `POST /api/facets`
+
+Each filter pill on the search page opens a panel with the values of one field, a checkbox and a
+count each. Long lists (hundreds of sources) are never sent whole: the panel asks for one page at
+a time, and the text typed in its search field is matched here, on the server.
+
+```http
+POST /api/facets
+X-API-Key: <API_KEY>
+Content-Type: application/json
+
+{
+  "question": "Who was Viola Desmond?",
+  "history": [],
+  "filters": { "contentcategory": ["people"], "attribution": ["Black Cultural Centre for Nova Scotia"] },
+  "facet": "attribution",
+  "search": "univ",
+  "sort": "count",
+  "limit": 8
+}
+```
+
+| Field      | Required | Rules                                  | Meaning                                          |
+| ---------- | -------- | -------------------------------------- | ------------------------------------------------ |
+| `question`, `history`, `filters` | no | same as in `/api/search`, but `question` may be empty | The search the records on the page come from. No question = browsing, see below |
+| `facet`    | yes      | one of the `FacetField` names          | The field whose values the panel lists           |
+| `search`   | no       | 0–100 characters                       | Only values containing this text. Case and accents don't matter: `univ` finds "Université" |
+| `sort`     | no       | `"count"` (default) or `"alpha"`       | Most records first (ties A–Z), or A–Z            |
+| `limit`    | no       | 1–100, default 8                       | Values per page (the web app: 8 first, 50 for A–Z) |
+| `cursor`   | no       | the `next_cursor` of the previous page | Which page. Leave it out for the first one      |
+
+**Response**
+
+```json
+{
+  "options": [
+    { "value": "Dalhousie University Libraries", "count": 11 },
+    { "value": "Université Sainte-Anne", "count": 3 }
+  ],
+  "selected": [{ "value": "Black Cultural Centre for Nova Scotia", "count": 41 }],
+  "total_options": 2,
+  "next_cursor": null
+}
+```
+
+- `options` is one page of values that match `search`. Checked values are included too, in their
+  normal place. Labels ("People", "PDF") are added by the web app.
+- `selected` is the field's checked values, **whatever** `search` says. The panel pins them on top,
+  so it needs no extra request for them.
+- `total_options` counts the matching values on all pages. `next_cursor` is `null` on the last
+  page. A cursor is just base64 JSON (`{"o": 8}` = start at the 9th value), but the web app only
+  sends back what it got, so the format can change later. A broken cursor answers `422`.
+
+**The counts are the same as in `/api/search`.** The field is counted without its own filter, with
+the other filters (see [Filters and counts](#filters-and-counts-facets)). The threshold is chosen
+the same way too (`run_with_fallback()`): a main search with `limit: 1` decides whether 0.7 or 0.6
+applies. Without this, the panel could say "People (12)" while the page shows records from the
+looser threshold.
+
+**Browsing (no question).** Before the first question, the search page lets people filter the
+newest records ([`/api/browse`](#browsing-post-apibrowse)). Its panels send no `question` (or an
+empty one). Then every search here is a placeholder search (`"q": ""`) with no threshold, like
+`/api/browse`, and the counts are those of the whole archive (with the other filters). `history`
+is ignored.
+
+**Values with 0 matches.** Meilisearch leaves them out of the counts. To still list them
+(the panel shows them disabled, last), a second request asks for every value in the whole archive:
+a placeholder search (`"q": ""`) with no filter and no threshold. It can't share the
+`/multi-search` with the others, because those all get the threshold. The two requests run at the
+same time (`asyncio.gather`). Checked values are always listed, even ones that no longer exist in
+the archive, so they can be unchecked.
+
+**Order.** `count`: most records first, ties A–Z. `alpha`: A–Z. In both, values with 0 records go
+last, except checked ones (`sort_options()`).
+
+**Long lists:** Meilisearch returns at most `maxValuesPerFacet` values per field (100 by default).
+Raise it before the source list grows past that, see
+[setup](setup.md#allow-long-value-lists-filter-panels).
 
 ## Settings
 
@@ -273,7 +393,7 @@ Read from environment variables when the container starts. To change one, set it
 same number. See the [README](../README.md#connecting-the-web-app).
 
 > The web app waits up to 90 seconds for an answer. If you raise `OLLAMA_TIMEOUT` a lot, raise
-> that too (`AbortSignal.timeout` in `web/src/routes/search/+page.server.ts`).
+> that too (`AbortSignal.timeout` in `web/src/routes/+page.server.ts`).
 
 ## Changing the code
 

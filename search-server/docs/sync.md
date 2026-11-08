@@ -23,7 +23,7 @@ what it has stored. The `sync` container keeps that copy up to date.
 | `MEILI_URL`        | `http://meilisearch:7700` | Where Meilisearch is                                       |
 | `MEILI_SYNC_KEY`   | (required)                | Meilisearch key that can add/delete documents             |
 | `MEILI_INDEX`      | `records`                 | Index name. search-api uses `records` too                 |
-| `APPROVED_ONLY`    | `false` (set in compose)  | `true` = only records with `status: "approved"` are searchable |
+| `APPROVED_ONLY`    | `false` (compose: `true`) | `true` = only records with `status: "approved"` are searchable |
 
 ## How it works
 
@@ -38,6 +38,11 @@ title, description, summary, attribution, link, resourceformat, contentcategory,
 Two conversions are needed because Meilisearch only understands plain JSON:
 - Mongo's `_id` (an `ObjectId`) becomes a string `id`.
 - `createdAt` (a Python `datetime`) becomes an ISO text like `2026-11-07T10:00:00`.
+
+And `createdAtTs`: the same date as a number (milliseconds since 1970), so browsing can sort
+newest first. Text dates sort correctly only if every one has the same format, and they don't:
+`2026-11-07T17:25:37.013000` vs `2026-11-07T17:25:38`. pymongo returns UTC dates without a
+timezone, so sync marks them as UTC before converting.
 
 And one for the category filter: an empty `contentcategory` (`null`) becomes `"uncategorized"`,
 because Meilisearch can't filter or count empty values. The record in MongoDB stays unchanged.

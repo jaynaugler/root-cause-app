@@ -107,6 +107,41 @@ curl -X PUT http://127.0.0.1:7700/indexes/records/settings/filterable-attributes
 - Records without a category are stored as `"uncategorized"` by sync, because Meilisearch can't
   filter or count empty values.
 
+### Allow long value lists (filter panels)
+
+Meilisearch counts at most 100 values per field by default (`maxValuesPerFacet`). The filter
+panels (`/api/facets`) list and search every value of a field, so with more than 100 sources the
+rest would be missing. Raise the limit:
+
+```bash
+curl -X PATCH http://127.0.0.1:7700/indexes/records/settings/faceting \
+  -H "Authorization: Bearer $MEILI_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  --data '{"maxValuesPerFacet": 1000}'
+```
+
+- `PATCH`, not `PUT`: it changes only this setting.
+- Not needed while every field has fewer than 100 values, but harmless. Check with
+  `curl http://127.0.0.1:7700/indexes/records/settings/faceting -H "Authorization: Bearer $MEILI_MASTER_KEY"`.
+
+### Allow sorting by date (browsing)
+
+Browsing without a question (`/api/browse`) shows the newest records first. Meilisearch can only
+sort by fields you allow:
+
+```bash
+curl -X PUT http://127.0.0.1:7700/indexes/records/settings/sortable-attributes \
+  -H "Authorization: Bearer $MEILI_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  --data '["createdAtTs"]'
+```
+
+- `createdAtTs` is the creation date as a number (milliseconds since 1970), written by sync.
+  Restart sync once after updating it, so every record gets the field:
+  `docker compose up -d --build --force-recreate sync`.
+- Like the filter list, run this **before** deploying a search-api that has `/api/browse`.
+  Otherwise browsing fails with `502` and the log says the field is not sortable.
+
 ## 3. Create the Meilisearch keys
 
 Each app gets its own key with **only the permissions it needs**. If a key leaks, the damage stays
