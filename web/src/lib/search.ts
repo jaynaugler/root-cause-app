@@ -46,7 +46,9 @@ export interface BrowseResponse {
 	facets?: Facets;
 }
 export const RECENT_LIMIT = 12; // records per page in the "Recent records" list
-export const SEARCH_LIMIT = 8; // records per page in a search answer
+// Records in a search answer, and how many each "Show more" adds. Sent as `limit` to
+// /api/search (search-api allows 1–20).
+export const SEARCH_LIMIT = 10;
 
 // One question + its answer in the follow-up thread (what the action returns)
 export interface ThreadTurn extends SearchResponse {
