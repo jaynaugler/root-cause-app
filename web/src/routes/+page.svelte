@@ -595,7 +595,7 @@
 
 	<!-- Browse list: the newest records (from search-api /api/browse, see +page.server.ts).
 	     Open on a fresh visit; collapses on search, then it's a toggle. -->
-	<details id="recent-records" bind:open={recentsOpen} class="recents scroll-mt-6 space-y-3 not-open:mb-4 not-open:-mt-4">
+	<details id="recent-records" bind:open={recentsOpen} class="recents scroll-mt-6 space-y-3 -mt-4 not-open:mb-4">
 		<summary class="cursor-pointer text-sm font-medium text-muted-foreground select-none">
 			Recent records
 			<!-- More than one page: which slice is shown, e.g. "· 13–24 of 70" -->
