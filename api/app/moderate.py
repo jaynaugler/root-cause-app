@@ -1,6 +1,5 @@
 """Curation moderation endpoints for reviewing, approving, and modifying submitted resources."""
 
-import logging
 from datetime import datetime
 from typing import Any
 
@@ -11,10 +10,6 @@ from pydantic import BaseModel, Field
 from pymongo.errors import PyMongoError
 
 from app.db import db
-from app.pdf import _REQUEST_SLOTS, PdfUrlIn, _run_pdf_metadata
-from app.video import VideoUrlIn, _run_video_metadata
-
-logger = logging.getLogger("uvicorn.error")
 
 router = APIRouter(tags=["moderate"])
 
@@ -114,7 +109,7 @@ async def get_pending_resources(limit: int = 100):
 
 @router.post("/moderate/approve/{doc_id}")
 async def approve_resource(doc_id: str):
-    """Approve a raw submission and execute the source extraction & AI pipeline on it."""
+    """Approve the reviewed record without rerunning extraction or AI cleanup."""
     oid = _parse_object_id(doc_id)
 
     doc = await coll.find_one({"_id": oid})
@@ -124,33 +119,7 @@ async def approve_resource(doc_id: str):
             detail="Submission not found.",
         )
 
-    # Determine document URL to process
-    doc_url = doc.get("link") or doc.get("attachmentUrl") or doc.get("fileUrl")
-
-    meta: dict[str, Any] = {}
-    if doc_url and str(doc_url).startswith(("http://", "https://")):
-        try:
-            async with _REQUEST_SLOTS:
-                if "youtube.com" in str(doc_url).lower() or "youtu.be" in str(doc_url).lower():
-                    meta = await _run_video_metadata(VideoUrlIn(url=doc_url))
-                else:
-                    meta = await _run_pdf_metadata(PdfUrlIn(url=doc_url))
-        except HTTPException:
-            raise
-        except Exception as exc:  # noqa: BLE001 — pipeline failure falls back gracefully
-            logger.warning("Pipeline execution encountered an error for doc %s: %s", doc_id, exc)
-
-    # Merge extracted metadata with submitter details as fallbacks
-    update_data: dict[str, Any] = {
-        "status": "approved",
-        "title": meta.get("title") or doc.get("name") or "Untitled Document",
-        "description": meta.get("description"),
-        "summary": meta.get("summary"),
-        "attribution": meta.get("attribution") or doc.get("name"),
-        "contentcategory": meta.get("contentcategory"),
-        "resourceformat": meta.get("resourceformat", "pdf"),
-        "imgurl": meta.get("imgurl"),
-    }
+    update_data = {"status": "approved"}
 
     try:
         await coll.update_one(
@@ -165,12 +134,12 @@ async def approve_resource(doc_id: str):
 
     return {
         "success": True,
-        "message": "Submission approved and processed through the pipeline.",
+        "message": "Submission approved.",
         "record": {
             "id": str(oid),
-            "title": update_data["title"],
-            "contentcategory": update_data["contentcategory"],
-            "summary": update_data["summary"],
+            "title": doc.get("title") or doc.get("name") or "Untitled Document",
+            "contentcategory": doc.get("contentcategory"),
+            "summary": doc.get("summary"),
         },
     }
 

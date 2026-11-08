@@ -33,8 +33,8 @@ CATEGORIES = ["people", "places", "events", "organizations", "publications", "hi
 SYSTEM_PROMPT = (
 	"You clean metadata records for a Black history archive search hub. "
 	"Write the cleaned record as JSON matching the requested schema. "
-	"Use ONLY information contained in the provided data — if something is "
-	"missing, return null. Never invent names, dates, places, events or "
+	"Use ONLY information contained in the provided data. If a metadata fact "
+	"is missing, return null for that fact. Never invent names, dates, places, events or "
 	"facts. Use names, titles and designations exactly as the record words "
 	"them — never swap in a more official-sounding one you may recognize. "
 	"Keep the language of the text."
@@ -60,11 +60,13 @@ Rules:
   production metadata is never content: "E-text prepared by…", transcriber
   notes, performance copyrights and hosting-site pages are the packaging, not
   the work. No titles, no markdown.
-- summary: a full plain-text summary of the document, at least 250 characters
-  (3 or more sentences). If the document is too short to support that, return
-  null instead of padding. Repair
-  line-breaks and obvious OCR letter errors, and drop watermark, credit-line,
-  navigation and page-number junk. No titles, no markdown, no newlines.
+- summary: WRITE a full plain-text summary of the supplied document or transcript,
+  at least 250 characters (3 or more sentences). This is generated from the text,
+  not copied from metadata; never return null merely because no existing summary
+  was provided. Return null only when the supplied text is absent or genuinely
+  too short to support a summary; do not pad. Repair line-breaks and obvious OCR
+  letter errors, and drop watermark, credit-line, navigation and page-number junk.
+  No titles, no markdown, no newlines.
 - attribution: the AUTHOR or originating organization of the resource — never
   the hosting platform or distributor (e.g. Project Gutenberg is the
   distributor of an ebook, not its author → attribute the book's author).
@@ -86,7 +88,7 @@ RESPONSE_SCHEMA = {
 		"attribution": {"type": "STRING", "nullable": True},
 		"contentcategory": {"type": "STRING", "enum": CATEGORIES},
 	},
-	"required": ["title", "description", "attribution", "contentcategory"],
+	"required": ["title", "description", "summary", "attribution", "contentcategory"],
 }
 
 # Capitalized words that are grammar, not names — sentence starters included.

@@ -3,7 +3,12 @@ import asyncio
 import pytest
 from fastapi import HTTPException
 
+from app.ai import RESPONSE_SCHEMA
 from app.video import _record_from_video, _transcript_excerpts, _video_id
+
+
+def test_summary_is_required_in_the_cleanup_response():
+	assert "summary" in RESPONSE_SCHEMA["required"]
 
 
 def test_video_id_accepts_common_youtube_urls():
