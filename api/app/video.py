@@ -3,6 +3,7 @@
 import asyncio
 import html
 import logging
+import os
 import re
 from http import HTTPStatus
 from urllib.parse import parse_qs, urlparse
@@ -10,13 +11,39 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, HttpUrl
-from youtube_transcript_api import YouTubeTranscriptApi, YouTubeTranscriptApiException
+from youtube_transcript_api import (
+	IpBlocked,
+	NoTranscriptFound,
+	PoTokenRequired,
+	RequestBlocked,
+	TranscriptsDisabled,
+	VideoUnavailable,
+	VideoUnplayable,
+	YouTubeRequestFailed,
+	YouTubeTranscriptApi,
+	YouTubeTranscriptApiException,
+)
+from youtube_transcript_api.proxies import WebshareProxyConfig
 
 from app.ai import clean_record
 from app.pdf import _REQUEST_SLOTS
 
 logger = logging.getLogger("uvicorn.error")
 router = APIRouter(tags=["resource"])
+
+# YouTube blocks transcript requests from datacenter IPs (Render), so the fetch needs
+# an egress YouTube accepts — a residential proxy. All three YouTubeTranscriptApi
+# proxy vars must be set (WebshareProxyConfig is the documented setup), and the api
+# service needs them in its Render environment; without them we use the direct IP.
+PROXY_USERNAME = os.environ.get("YT_PROXY_USERNAME")
+PROXY_PASSWORD = os.environ.get("YT_PROXY_PASSWORD")
+
+
+def _transcript_api() -> YouTubeTranscriptApi:
+	"""The transcript client, through the Webshare proxy when it is configured."""
+	if PROXY_USERNAME and PROXY_PASSWORD:
+		return YouTubeTranscriptApi(WebshareProxyConfig(PROXY_USERNAME, PROXY_PASSWORD))
+	return YouTubeTranscriptApi()
 
 OEMBED_TIMEOUT = 10.0
 TRANSCRIPT_EXCERPT_CHARS = 15_000  # three excerpts + metadata fit the AI input cap
@@ -50,7 +77,7 @@ def _video_id(payload_url: str) -> str:
 
 def _fetch_transcript(video_id: str) -> tuple[str, str]:
 	"""Synchronous library call, run in a thread by the async endpoint."""
-	api = YouTubeTranscriptApi()
+	api = _transcript_api()
 	available = list(api.list(video_id))
 	if not available:
 		raise ValueError("This video has no available transcript.")
@@ -133,16 +160,31 @@ async def video_metadata(payload: VideoUrlIn) -> dict:
 		return await _run_video_metadata(payload)
 
 
+def _transcript_message(exc: Exception) -> str:
+	"""A message that says which thing went wrong, instead of one generic one."""
+	if isinstance(exc, TranscriptsDisabled):
+		return "This video has captions turned off, so there is no transcript to read."
+	if isinstance(exc, NoTranscriptFound):
+		return "No public transcript is available for this video."
+	if isinstance(exc, (VideoUnavailable, VideoUnplayable)):
+		return "That video is unavailable (it may be private, age-restricted or removed)."
+	if isinstance(exc, (IpBlocked, RequestBlocked, PoTokenRequired, YouTubeRequestFailed)):
+		# YouTube refusing this server (e.g. datacenter IP) is a server-side problem,
+		# not a problem with the pasted link.
+		return "YouTube is refusing transcript requests from our server right now — try again later."
+	return "Could not retrieve a public transcript for this YouTube video."
+
+
 async def _run_video_metadata(payload: VideoUrlIn) -> dict:
 	video_id = _video_id(str(payload.url))
 	metadata = await _oembed(video_id)
 	try:
 		text, language = await asyncio.to_thread(_fetch_transcript, video_id)
 	except (YouTubeTranscriptApiException, ValueError) as exc:
-		raise HTTPException(
-			HTTPStatus.UNPROCESSABLE_ENTITY,
-			"Could not retrieve a public transcript for this YouTube video.",
-		) from exc
+		logger.warning(
+			"Transcript fetch failed for %s: %s: %s", video_id, type(exc).__name__, exc
+		)
+		raise HTTPException(HTTPStatus.UNPROCESSABLE_ENTITY, _transcript_message(exc)) from exc
 	if not text:
 		raise HTTPException(HTTPStatus.UNPROCESSABLE_ENTITY, "The video's transcript is empty.")
 	return await _record_from_video(video_id, metadata, {"text": text, "language": language})
