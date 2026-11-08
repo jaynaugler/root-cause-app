@@ -1,17 +1,33 @@
 <script lang="ts">
-	import { applyAction, enhance, type SubmitFunction } from '$app/forms';
+	import { applyAction, deserialize, enhance, type SubmitFunction } from '$app/forms';
 	import { onMount, tick } from 'svelte';
-	import { Button } from '#lib/components/ui/button/index.js';
-	import { Input } from '#lib/components/ui/input/index.js';
 	import SearchSummary from '#lib/components/search/SearchSummary.svelte';
 	import ResultsCard from '#lib/components/resultsCard/ResultsCard.svelte';
 	import MagicBorder from '#lib/components/search/MagicBorder.svelte';
-	import { MAX_HISTORY, type ThreadTurn } from '#lib/search.js';
-	import OrangePattern from '#lib/assets/OrangePattern.jpg';
+	import SearchBox from '#lib/components/search/SearchBox.svelte';
+	import FilterBar from '#lib/components/search/FilterBar.svelte';
+	import FacetPanel from '#lib/components/search/FacetPanel.svelte';
+	import {
+		FACET_FIELDS,
+		MAX_HISTORY,
+		activeFacetCount,
+		type FacetField,
+		type Filters,
+		type HistoryTurn,
+		type PanelSearch,
+		type ThreadTurn
+	} from '#lib/search.js';
 
 	let { data, form } = $props();
+	// Text of the main search box. Starts from `form` so a no-JS submit (full page reload) keeps the
+	// question; with JS the box is never cleared, so later `form` changes don't need copying in.
+	// svelte-ignore state_referenced_locally
+	let newQuestion = $state(form?.question ?? '');
 
 	type Mode = 'new' | 'followup';
+
+	// The "Recent records" list under the search box. Hidden for now; true brings it back.
+	const SHOW_RECENTS = false;
 
 	// sessionStorage: survives a refresh, cleared when the tab closes, separate per tab
 	const STORAGE_KEY = 'search-thread';
@@ -37,7 +53,20 @@
 			// Storage blocked (private mode) or corrupt JSON: start empty, like before
 		}
 		restored = true;
+		// The thread is on screen and the list collapsed: drop the marker from the <svelte:head>
+		// script so the list shows again (after tick(), so both changes reach the screen together)
+		tick().then(() => delete document.documentElement.dataset.savedThread);
+		// Refreshed in the middle of a filter change: the summary still needs rewriting
+		if (thread.at(-1)?.summaryStale) scheduleSummary(refineId);
 	});
+
+	// Runs in the browser while the page is still loading, before anything is drawn. The server
+	// can't see sessionStorage, so it always sends "Recent records" open; if a thread is saved,
+	// this marks <html> so the CSS below hides the list until onMount has restored the thread.
+	// (Same trick sites use to avoid a flash of the wrong dark/light theme.)
+	// The closing tag is written with a backslash (<\/script>): the plain form, anywhere in this
+	// block (even in a comment), would end this component's own script block early.
+	const hideRecentsScript = `<script>try{if(sessionStorage.getItem(${JSON.stringify(STORAGE_KEY)}))document.documentElement.dataset.savedThread=''}catch(e){}<\/script>`;
 
 	// Save whenever the thread changes
 	$effect(() => {
@@ -54,19 +83,23 @@
 	// Which form the last error belongs to, so it shows under the right input
 	let errorFor = $state<Mode>('new');
 	let followUp = $state('');
-	let followUpInput = $state<HTMLInputElement | null>(null);
+	let followUpInput = $state<HTMLInputElement | HTMLTextAreaElement | null>(null);
 
-	// The "Recent records" browse list: open on a fresh visit, auto-collapses
-	// as soon as a search starts, then it's just a triangle the user can
-	// toggle (bind:open keeps manual opens/closes sticky while the thread lives).
+	// The "Recent records" browse list: open only while there are no results. It collapses as
+	// soon as a search starts, and when results appear without one (the thread restored after a
+	// refresh, or a no-JS answer). Then it's just a triangle the user can toggle (bind:open keeps
+	// manual opens/closes sticky while the thread lives).
 	// Driven by `turns`, not `visibleTurns`: a new search temporarily hides the
 	// thread and must NOT pop this open mid-search.
-	let recentsOpen = $state(true);
-	let threadHasTurns = $state(false); // so the reopen only fires on emptying, not every render
+	// Starts closed when the server already has an answer (no-JS submit), so it never renders open.
+	// svelte-ignore state_referenced_locally
+	let recentsOpen = $state(!form?.results);
+	let threadHasTurns = $state(false); // so open/close only fire on a change, not every render
 	$effect(() => {
-		if (turns.length) {
+		if (turns.length && !threadHasTurns) {
 			threadHasTurns = true;
-		} else if (threadHasTurns) {
+			recentsOpen = false;
+		} else if (!turns.length && threadHasTurns) {
 			threadHasTurns = false;
 			recentsOpen = true;
 		}
@@ -92,6 +125,191 @@
 		)
 	);
 
+	// ---- Filters (the bar under the search box) ----
+	// The filters in use are the ones the latest answer was searched with. They are also sent
+	// with new questions and follow-ups (hidden fields in both forms), so they stay active.
+	// A filter change re-runs the latest question in two steps:
+	//   1. FILTER_DELAY after the last change, WITHOUT the AI summary: new records, counts and
+	//      total in a few milliseconds. Quick clicks in a row make one search, not one each.
+	//   2. once the clicking has stopped for SUMMARY_DELAY: once more WITH the summary
+	// Every change (and every new search) cancels whatever is still running for the previous
+	// one (AbortController) and bumps refineId; an answer that arrives anyway for an older id is
+	// ignored, so a slow old answer can never overwrite a newer one.
+	const FILTER_DELAY = 300; // ms
+	const SUMMARY_DELAY = 1000; // ms
+	const activeFilters = $derived<Filters>(thread.at(-1)?.filters ?? {});
+	let refining = $state(false); // a filter changed; its records haven't arrived yet
+	let summaryUpdating = $state(false); // the new summary is being written
+	let refineError = $state('');
+	// Set once a filter update has fully arrived, shown in the newest summary's subtitle
+	// ("… · updated for 2 filters") and read out by screen readers. null = nothing to say.
+	let refineStatus = $state<{ shown: string; spoken: string } | null>(null);
+	let refineId = 0;
+	let filterTimer: ReturnType<typeof setTimeout> | undefined;
+	let summaryTimer: ReturnType<typeof setTimeout> | undefined;
+	let refineController: AbortController | null = null; // the request running for the latest change
+	// The filters the records on screen were searched with: restored if an update fails
+	let lastGoodFilters: Filters = {};
+
+	const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+	// Change only the newest turn of the thread
+	function replaceLatest(changes: Partial<ThreadTurn>) {
+		thread = [...thread.slice(0, -1), { ...thread[thread.length - 1], ...changes }];
+	}
+
+	// Context for re-running the latest question = the turns BEFORE it (the latest is the one
+	// being re-run). Used by askLatest() and the filter panels, so their counts match the records.
+	function historyBefore(turns: ThreadTurn[]): HistoryTurn[] {
+		return turns
+			.slice(0, -1)
+			.slice(-MAX_HISTORY)
+			.map(({ question, summary }) => ({ question, summary }));
+	}
+
+	// Call the search action from code instead of a form submit (what use:enhance does inside).
+	// Returns the new turn, or null if the search failed or was cancelled through `signal`.
+	async function askLatest(
+		filters: Filters,
+		withSummary: boolean,
+		signal: AbortSignal
+	): Promise<ThreadTurn | null> {
+		const body = new FormData();
+		body.set('question', thread[thread.length - 1].question);
+		body.set('history', JSON.stringify(historyBefore(thread)));
+		for (const field of FACET_FIELDS) {
+			for (const value of filters[field] ?? []) body.append(field, value);
+		}
+		if (!withSummary) body.set('summary', 'off');
+		try {
+			const response = await fetch('?/search', {
+				method: 'POST',
+				body,
+				headers: { 'x-sveltekit-action': 'true' },
+				signal
+			});
+			const result = deserialize(await response.text());
+			return result.type === 'success' ? (result.data as unknown as ThreadTurn) : null;
+		} catch {
+			return null; // network error, or cancelled by a newer change
+		}
+	}
+
+	// Stop everything still running or waiting for the previous change: the timers, and the
+	// request in flight (its fetch() rejects, askLatest returns null, and the refineId check
+	// then ignores it). Returns the new id.
+	function cancelRefine(): number {
+		clearTimeout(filterTimer);
+		clearTimeout(summaryTimer);
+		refineController?.abort();
+		refineController = null;
+		return ++refineId;
+	}
+
+	// A new request for the latest change, cancelled by the next cancelRefine()
+	function newSignal(): AbortSignal {
+		refineController = new AbortController();
+		return refineController.signal;
+	}
+
+	// The status once an update has fully arrived. No filters left = nothing to say.
+	function setStatus(withAnswer: boolean) {
+		const n = activeFacetCount(activeFilters);
+		const filters = plural(n, 'filter');
+		refineStatus = n
+			? {
+					shown: withAnswer ? `updated for ${filters}` : `records updated for ${filters}`,
+					spoken: `${plural(latestTotal, 'record')}. ${withAnswer ? 'Answer and records' : 'Records'} updated for ${filters}.`
+				}
+			: null;
+	}
+
+	// Step 1: the pills change at once; the records are fetched FILTER_DELAY after the last change
+	function applyFilters(filters: Filters) {
+		// First change of a burst of clicks: remember what the records on screen were searched with
+		if (!refining) lastGoodFilters = activeFilters;
+		const id = cancelRefine();
+		summaryUpdating = false;
+		refineError = '';
+		refineStatus = null; // hidden until this change has arrived
+		replaceLatest({ filters }); // the pill changes colour immediately
+		refining = true;
+		filterTimer = setTimeout(() => fetchRecords(id, filters), FILTER_DELAY);
+	}
+
+	async function fetchRecords(id: number, filters: Filters) {
+		const answer = await askLatest(filters, false, newSignal());
+		if (id !== refineId) return; // a newer change or a new search took over
+		refining = false;
+
+		if (!answer) {
+			replaceLatest({ filters: lastGoodFilters }); // undo, the records didn't change
+			refineError = 'Could not apply the filter. Try again.';
+		} else if (!answer.results.length) {
+			// Nothing matches: nothing to summarise either
+			replaceLatest({ results: [], total: 0, facets: answer.facets, summary: null, provider: null, summaryStale: false });
+			setStatus(false);
+		} else {
+			// The old summary stays visible but is marked stale: its [1], [2] meant other records
+			replaceLatest({ results: answer.results, total: answer.total, facets: answer.facets, summaryStale: true });
+			scheduleSummary(id);
+		}
+	}
+
+	// Step 2: rewrite the summary once the clicking has stopped
+	function scheduleSummary(id: number) {
+		clearTimeout(summaryTimer);
+		summaryUpdating = true;
+		summaryTimer = setTimeout(async () => {
+			const answer = await askLatest(activeFilters, true, newSignal());
+			if (id !== refineId) return;
+			summaryUpdating = false;
+			// Take the whole answer: records and summary come from the same search, so [n] match.
+			// If it failed, show "no summary" rather than one about other records.
+			replaceLatest(
+				answer
+					? { ...answer, summaryStale: false }
+					: { summary: null, provider: null, summaryStale: false }
+			);
+			setStatus(!!answer?.summary);
+		}, SUMMARY_DELAY);
+	}
+
+	// A new question or follow-up: stop any filter update still running for the old answer
+	function stopRefining() {
+		cancelRefine();
+		refining = false;
+		summaryUpdating = false;
+		refineError = '';
+		refineStatus = null;
+	}
+
+	function toggleFilter(field: FacetField, value: string) {
+		const current = activeFilters[field] ?? [];
+		const values = current.includes(value)
+			? current.filter((v) => v !== value)
+			: [...current, value];
+		const next: Filters = { ...activeFilters, [field]: values };
+		if (!values.length) delete next[field];
+		applyFilters(next);
+	}
+
+	// A panel's "Clear": uncheck every value of one field, keep the others
+	function clearFacet(field: FacetField) {
+		const next: Filters = { ...activeFilters };
+		delete next[field];
+		applyFilters(next);
+	}
+
+	// What the filter panels count against (see PanelSearch), and the number for "Show N records"
+	const panelSearch = $derived<PanelSearch | null>(
+		thread.length
+			? { question: thread[thread.length - 1].question, history: historyBefore(thread), filters: activeFilters }
+			: null
+	);
+	// Older saved threads have no total: then the number of records shown is the best we know
+	const latestTotal = $derived(thread.at(-1)?.total ?? thread.at(-1)?.results.length ?? 0);
+
 	// One submit handler for both forms; `mode` decides whether the answer replaces or extends the thread
 	// Scroll an element to the top of the screen (scroll-mt-6 on the target leaves a small gap)
 	function scrollToTop(id: string) {
@@ -100,6 +318,7 @@
 
 	function submitTo(mode: Mode): SubmitFunction {
 		return ({ formData }) => {
+			stopRefining();
 			pending = { mode, question: formData.get('question')?.toString().trim() ?? '' };
 			errorFor = mode;
 			recentsOpen = false; // a search starting shouldn't wait for results to reclaim space
@@ -132,6 +351,34 @@
 	}
 </script>
 
+<svelte:head>
+	<!-- eslint-disable-next-line svelte/no-at-html-tags -- our own constant, no user input -->
+	{@html hideRecentsScript}
+</svelte:head>
+
+<!-- The active filters as hidden fields, so new questions and follow-ups use them too -->
+{#snippet filterInputs()}
+	{#each FACET_FIELDS as field (field)}
+		{#each activeFilters[field] ?? [] as value (value)}
+			<input type="hidden" name={field} {value} />
+		{/each}
+	{/each}
+{/snippet}
+
+<!-- Inside of a filter panel (FilterBar shows it when a pill is clicked) -->
+{#snippet filterPanel(field: FacetField, close: () => void)}
+	{#if panelSearch}
+		<FacetPanel
+			{field}
+			search={panelSearch}
+			total={latestTotal}
+			onToggle={toggleFilter}
+			onClear={clearFacet}
+			{close}
+		/>
+	{/if}
+{/snippet}
+
 {#snippet errors(mode: Mode)}
 	{#if errorFor === mode && form?.errors?.question}
 		<p class="text-sm font-medium text-red-500">{form.errors.question[0]}</p>
@@ -142,39 +389,40 @@
 {/snippet}
 
 <main class="container mx-auto max-w-6xl px-4 pt-12 space-y-8">
+	<!-- Title + search box, as wide as the answers below -->
 	<header class="space-y-4">
 		<h1 class="text-2xl font-semibold">Search the archive</h1>
 
 		<!-- New search: starts a fresh thread -->
 		<form method="POST" action="?/search" class="w-full space-y-2" use:enhance={submitTo('new')}>
-			<div class="flex gap-2">
-				<MagicBorder active={pending?.mode === 'new'} class="flex-1">
-					<Input
-						name="question"
-						placeholder="Ask a question, e.g. Who was Viola Desmond?"
-						value={form?.question ?? ''}
-						disabled={!!pending}
-					/>
-				</MagicBorder>
-				<Button
-					type="submit"
-					disabled={!!pending}
-					class="self-stretch inline-flex w-40 items-center justify-between overflow-hidden rounded-md bg-search-btn p-0 text-white hover:bg-search-btn-hover"
-				>
-					<img
-						src={OrangePattern}
-						alt=""
-						class="size-12 shrink-0 rounded-l-md object-cover"
-					/>
-					<span class="px-3">{pending?.mode === 'new' ? 'Searching…' : 'Search'}</span>
-				</Button>
-			</div>
+			{@render filterInputs()}
+			<MagicBorder active={pending?.mode === 'new'} rounded="rounded-2xl">
+				<SearchBox bind:value={newQuestion} disabled={!!pending} />
+			</MagicBorder>
 			{@render errors('new')}
 		</form>
+
+		<!-- The filter bar, right under the search box. Its filters are the newest answer's: a
+		     change re-runs the newest question (also a follow-up further down), and new questions
+		     use them too. Only once there is an answer, and only with JavaScript (the thread
+		     needs it too). Outside the <form>, so its buttons and checkboxes never submit it. -->
+		{#if thread.length}
+			<FilterBar
+				filters={activeFilters}
+				disabled={!!pending}
+				onClearAll={() => applyFilters({})}
+				panel={filterPanel}
+			/>
+			{#if refineError}
+				<p class="text-sm font-medium text-red-500">{refineError}</p>
+			{/if}
+		{/if}
 	</header>
 
-	<!-- Browse list: open on a fresh visit; collapses on search, then it's a toggle -->
-	<details bind:open={recentsOpen} class="space-y-3">
+	<!-- Browse list: open on a fresh visit; collapses on search, then it's a toggle.
+	     Hidden for now (SHOW_RECENTS). -->
+	{#if SHOW_RECENTS}
+	<details bind:open={recentsOpen} class="recents space-y-3">
 		<summary class="cursor-pointer text-sm font-medium text-muted-foreground select-none">
 			Recent records
 		</summary>
@@ -193,22 +441,40 @@
 			{/if}
 		</div>
 	</details>
+	{/if}
 
 	<!-- The thread: question → summary → records, oldest first -->
 	{#each visibleTurns as turn, t (t)}
 		{@const isLatest = t === visibleTurns.length - 1}
+		{@const found = turn.total ?? turn.results.length}
+		<!-- aria-busy: tells screen readers this part is being updated (after a filter change) -->
 		<article
 			id="turn-{t}"
 			class="scroll-mt-6 space-y-4 {isLatest && padLatestTurn ? FILL_SCREEN : ''}"
-		> 
+			aria-busy={isLatest && refining}
+		>
 			<h2 class="text-lg font-medium">{turn.question}</h2>
 
-			<SearchSummary summary={turn.summary} provider={turn.provider} anchorPrefix="t{t}-result-" />
+			<SearchSummary
+				summary={turn.summary}
+				provider={turn.provider}
+				anchorPrefix="t{t}-result-"
+				stale={turn.summaryStale}
+				updating={isLatest && summaryUpdating}
+				status={isLatest ? refineStatus : null}
+			/>
 
 			<!-- Records: open for the newest turn, collapsed for older ones -->
-			<details open={isLatest} class="group space-y-3">
+			<details
+				open={isLatest}
+				class="group space-y-3 transition-opacity {isLatest && refining ? 'opacity-60' : ''}"
+			>
 				<summary class="cursor-pointer text-sm font-medium text-muted-foreground select-none">
-					{turn.results.length} record{turn.results.length === 1 ? '' : 's'} found
+					{#if found > turn.results.length}
+						The {turn.results.length} best of {plural(found, 'record')}
+					{:else}
+						{plural(turn.results.length, 'record')} found
+					{/if}
 				</summary>
 				<div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
 					{#each turn.results as result, i (result.id)}
@@ -238,34 +504,28 @@
 
 	<!-- Follow-up: only once there is something to follow up on. Sticky so it stays in reach. -->
 	{#if turns.length > 0}
-		<!-- Fades the content out above the bar so it reads as "pinned", not as more page -->
+		<!-- Fades the content out above the bar so it reads as "pinned", not as more page.
+		     Fades to the page's cream (bg-[#FBF7F2] in +layout.svelte), not white -->
 		<form
 			method="POST"
 			action="?/search"
-			class="sticky bottom-0 bg-linear-to-t from-background from-80% to-transparent pt-6 pb-4"
+			class="sticky bottom-0 bg-linear-to-t from-[#FBF7F2] from-80% to-transparent pt-6 pb-4"
 			use:enhance={submitTo('followup')}
 		>
 			<input type="hidden" name="history" value={historyJson} />
-			<!-- Light tinted panel so it doesn't read as another result card (temporary styling) -->
-			<div class="space-y-2 rounded-xl border bg-muted p-3 shadow-lg">
-				<label for="follow-up" class="block px-1 text-xs font-medium text-muted-foreground">
-					Follow-up question — uses the answers above as context
-				</label>
-				<div class="flex gap-2">
-					<MagicBorder active={pending?.mode === 'followup'} class="flex-1">
-						<Input
-							id="follow-up"
-							name="question"
-							placeholder="Ask a follow-up…"
-							bind:value={followUp}
-							bind:ref={followUpInput}
-							disabled={!!pending}
-						/>
-					</MagicBorder>
-					<Button type="submit" disabled={!!pending}>
-						{pending?.mode === 'followup' ? 'Asking…' : 'Ask'}
-					</Button>
-					</div>
+			{@render filterInputs()}
+			<!-- Slim pill, same width as the search box at the top. The label is for screen readers. -->
+			<div class="mx-auto max-w-2xl space-y-2">
+				<MagicBorder active={pending?.mode === 'followup'} rounded="rounded-full">
+					<SearchBox
+						variant="pill"
+						placeholder="Ask a follow-up…"
+						label="Follow-up question — uses the answers above as context"
+						bind:value={followUp}
+						bind:ref={followUpInput}
+						disabled={!!pending}
+					/>
+				</MagicBorder>
 				{@render errors('followup')}
 			</div>
 		</form>
@@ -273,3 +533,10 @@
 		<div class="pb-12"></div>
 	{/if}
 </main>
+
+<style>
+	/* While a saved thread is being restored after a refresh (see hideRecentsScript) */
+	:global(html[data-saved-thread]) .recents {
+		display: none;
+	}
+</style>

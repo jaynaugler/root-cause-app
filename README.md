@@ -67,6 +67,8 @@ A hackathon monorepo: SvelteKit 3 / Svelte 5 web app (`web/`) plus a FastAPI + M
 - `web/src/lib/server/db.ts` — MongoDB client singleton (Atlas-first fallback to local)
 - `web/src/env.ts` — Kit 3 environment variable declarations; read via `$app/env/private`
 - `web/src/lib/components/ui/` — shadcn-svelte components
+- `web/src/lib/components/search/` — the search page (home page `/`): search box, AI summary, filter bar + filter panels
+- `web/src/lib/search.ts` — search types and helpers (filter fields, pill labels, highlighting); `web/src/lib/server/search-params.ts` — input checks for the search action and `web/src/routes/facets/[facet]/+server.ts` (filter panel options). The search itself runs in `search-server/`
 - `web/src/scripts/seed.ts` — standalone seeding script (`tsx` + `dotenv`, independent of SvelteKit)
 - `web/vite.config.ts` — Kit 3 configuration (inline: no `svelte.config.js`) incl. the `/api` dev proxy
 - `api/app/main.py` — FastAPI app (`/health`, Swagger docs at `/docs`)

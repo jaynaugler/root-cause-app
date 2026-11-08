@@ -1,67 +1,9 @@
 import { SEARCH_API_URL, SEARCH_API_KEY } from '$app/env/private';
 import { fail } from '@sveltejs/kit';
-import { z } from 'zod';
-import {
-	FACET_FIELDS,
-	MAX_HISTORY,
-	MAX_SUMMARY_CHARS,
-	type Filters,
-	type HistoryTurn,
-	type SearchResponse,
-	type ThreadTurn
-} from '#lib/search.js';
+import { type SearchResponse, type ThreadTurn } from '#lib/search.js';
+// The question / history / filter checks are shared with the filter panels' route
+import { parseFilters, parseHistory, searchSchema } from '#lib/server/search-params.js';
 import type { Actions, PageServerLoad } from './$types';
-
-// Same limits as SearchRequest in search-api/main.py
-const searchSchema = z.object({
-	question: z
-		.string()
-		.trim()
-		.min(1, { message: 'Type a question.' })
-		.max(500, { message: 'Question cannot exceed 500 characters.' })
-});
-
-// Earlier turns sent by the follow-up form (hidden field, JSON). Same limits as Turn in main.py.
-const historySchema = z
-	.array(
-		z.object({
-			question: z.string().trim().min(1).max(500),
-			summary: z
-				.string()
-				.nullable()
-				.transform((s) => s?.slice(0, MAX_SUMMARY_CHARS) ?? null)
-		})
-	)
-	.transform((turns) => turns.slice(-MAX_HISTORY));
-
-// Missing or malformed history → no context (a plain new search), never an error
-function parseHistory(raw: FormDataEntryValue | null): HistoryTurn[] {
-	if (typeof raw !== 'string' || !raw) return [];
-	try {
-		const parsed = historySchema.safeParse(JSON.parse(raw));
-		return parsed.success ? parsed.data : [];
-	} catch {
-		return [];
-	}
-}
-
-// Checked filter values arrive as repeated form fields, the normal HTML way for checkboxes:
-// <input type="checkbox" name="contentcategory" value="people"> → contentcategory=people.
-// Same limits as SearchRequest.filters in search-api/main.py. Values are not trimmed: they must
-// match the stored values exactly.
-const filterValuesSchema = z.array(z.string().min(1).max(200)).max(20);
-
-// Unknown fields are ignored (only FACET_FIELDS are read). A field with invalid values is
-// dropped instead of failing the search, like a malformed history.
-function parseFilters(data: FormData): Filters {
-	const filters: Filters = {};
-	for (const field of FACET_FIELDS) {
-		const values = [...new Set(data.getAll(field).filter((v) => typeof v === 'string'))];
-		const parsed = filterValuesSchema.safeParse(values);
-		if (parsed.success && parsed.data.length) filters[field] = parsed.data;
-	}
-	return filters;
-}
 
 export const actions: Actions = {
 	search: async ({ request, fetch }) => {
@@ -79,6 +21,8 @@ export const actions: Actions = {
 		const { question } = parsed.data;
 		const history = parseHistory(data.get('history'));
 		const filters = parseFilters(data);
+		// summary=off: records and counts only (a filter click). Anything else: with AI summary.
+		const summary = data.get('summary') !== 'off';
 
 		if (!SEARCH_API_URL || !SEARCH_API_KEY) {
 			return fail(500, { question, message: 'Search is not configured (SEARCH_API_URL / SEARCH_API_KEY).' });
@@ -90,7 +34,7 @@ export const actions: Actions = {
 			response = await fetch(`${SEARCH_API_URL}/api/search`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json', 'X-API-Key': SEARCH_API_KEY },
-				body: JSON.stringify({ question, history, filters }),
+				body: JSON.stringify({ question, history, filters, summary }),
 				// Summaries from Ollama can take a while
 				signal: AbortSignal.timeout(90_000)
 			});

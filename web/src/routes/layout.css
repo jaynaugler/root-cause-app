@@ -17,6 +17,16 @@
 	--card-btn-hover: #3B8A10;
 	--search-btn: #D76A1D;
 	--search-btn-hover: #AD4B14;
+	/* Filter pills and panels (spec "Faceted filters", Nov 2026). The text pairs meet 4.5:1
+	   contrast, including --ink-muted on white and on --panel-footer: keep that when changing. */
+	--ink: #1F1B16; /* text; the ring around an open pill */
+	--ink-muted: #6B6458; /* counts, section labels */
+	--pill-border: #D2CBBD;
+	--filter-active: #FBE8DB; /* active pill fill; highlighted letters */
+	--filter-active-border: #C2410C; /* active pill border; checkboxes */
+	--filter-active-text: #6E2305;
+	--field-border: #CFC8BA; /* the search field in a panel */
+	--panel-footer: #FBFAF7;
 	--popover: oklch(1 0 0);
 	--popover-foreground: oklch(0.145 0 0);
 	--primary: oklch(0.205 0 0);
@@ -118,6 +128,14 @@
 	--color-card-btn-hover: var(--card-btn-hover);
 	--color-search-btn: var(--search-btn);
 	--color-search-btn-hover: var(--search-btn-hover);
+	--color-ink: var(--ink);
+	--color-ink-muted: var(--ink-muted);
+	--color-pill-border: var(--pill-border);
+	--color-filter-active: var(--filter-active);
+	--color-filter-active-border: var(--filter-active-border);
+	--color-filter-active-text: var(--filter-active-text);
+	--color-field-border: var(--field-border);
+	--color-panel-footer: var(--panel-footer);
 	--color-foreground: var(--foreground);
 	--color-background: var(--background);
 	--radius-sm: calc(var(--radius) * 0.6);
