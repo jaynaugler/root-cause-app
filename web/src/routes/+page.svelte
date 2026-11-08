@@ -505,6 +505,7 @@
 
 <main class="container mx-auto max-w-6xl px-4 pt-12 space-y-8">
 	<!-- Title + search box, as wide as the answers below -->
+	<section class="relative overflow-hidden bg-[#FF8C4B] px-4 pb-28 pt-8 text-center md:pb-32 md:pt-12">
 	<header class="space-y-4">
 		<div class="flex items-center justify-between gap-4">
 			<h1 class="text-2xl font-semibold">Search the archive</h1>
@@ -538,6 +539,7 @@
 			<p class="text-sm font-medium text-red-500">{refineError || browseError}</p>
 		{/if}
 	</header>
+	</section>
 
 	<!-- Browse list: the newest records (from search-api /api/browse, see +page.server.ts).
 	     Open on a fresh visit; collapses on search, then it's a toggle. -->

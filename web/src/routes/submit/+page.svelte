@@ -107,7 +107,7 @@
 </script>
 
 <svelte:head>
-	<title>Submit a request · Our History Hub</title>
+	<title>Submit a request · Black History Knowledge Hub</title>
 </svelte:head>
 
 <main>
