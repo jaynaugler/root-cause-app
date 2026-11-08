@@ -59,6 +59,7 @@ async def get_pending_resources(limit: int = 100):
                     "submittedDescription": 1,
                     "submittedSummary": 1,
                     "summary": 1,
+                    "resourceformat": 1,
                     "link": 1,
                     "sitelink": 1,
                     "attachmentName": 1,
@@ -103,6 +104,7 @@ async def get_pending_resources(limit: int = 100):
                 "generatedDescription": doc.get("description"),
                 "submittedSummary": doc.get("submittedSummary"),
                 "summary": doc.get("summary"),
+                "resourceformat": doc.get("resourceformat"),
                 "link": doc.get("link"),
                 "sitelink": doc.get("sitelink"),
                 "attachmentName": attachment_name,
@@ -210,22 +212,27 @@ async def modify_pending_resource(doc_id: str, payload: ModifySubmissionPayload)
 
 
 @router.delete("/moderate/reject/{doc_id}")
-async def reject_and_delete_resource(doc_id: str):
-    """Reject and permanently remove a submission from the database."""
+async def reject_resource(doc_id: str):
+    """Exclude rejected feed entries; permanently delete other submission types."""
     oid = _parse_object_id(doc_id)
 
     try:
+        doc = await coll.find_one({"_id": oid}, {"resourceformat": 1})
+        if not doc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Submission not found.")
+        if doc.get("resourceformat") in ("article", "podcast"):
+            await coll.update_one({"_id": oid}, {"$set": {"status": "unapproved"}})
+            return {
+                "success": True,
+                "message": "Feed entry rejected; it will be excluded from future checks.",
+            }
         result = await coll.delete_one({"_id": oid})
     except PyMongoError as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database deletion failed: {e!s}",
+            detail=f"Database rejection failed: {e!s}",
         ) from e
 
     if result.deleted_count == 0:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Submission not found.",
-        )
-
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Submission not found.")
     return {"success": True, "message": "Submission rejected and removed."}

@@ -27,6 +27,7 @@
 		generatedDescription: string | null;
 		submittedSummary: string | null;
 		summary: string | null;
+		resourceformat: string | null;
 		link: string | null;
 		sitelink: string | null;
 		attachmentName: string | null;
@@ -232,8 +233,11 @@
 
 	async function rejectItem(item: PendingSubmission) {
 		const label = item.attachmentName || item.name || 'this submission';
+		const isFeedEntry = item.resourceformat === 'article' || item.resourceformat === 'podcast';
 		const confirmed = confirm(
-			`Are you sure you want to permanently reject and remove "${label}" from the submission queue?`
+			isFeedEntry
+				? `Reject "${label}" and exclude it from future feed checks?`
+				: `Are you sure you want to permanently reject and remove "${label}" from the submission queue?`
 		);
 		if (!confirmed) return;
 
