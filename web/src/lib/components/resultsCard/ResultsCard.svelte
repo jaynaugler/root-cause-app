@@ -68,25 +68,6 @@
     let linkType = $derived(classifyLink(result, href));
 </script>
 
-{#snippet goButton()}
-    {#if href}
-        <Button
-            class="inline-flex h-12 w-40 items-center justify-between overflow-hidden bg-card-btn p-0 text-white hover:bg-card-btn-hover {searchMode ? 'shrink-0 self-start' : 'mt-auto self-end'}"
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-        >
-            <img
-                src={GreenPattern}
-                alt="Pattern on button"
-                class="size-12 shrink-0 rounded-l-md object-cover"
-            />
-            <span class="px-3">Go!</span>
-            <ArrowRightIcon class="mx-3 size-5 shrink-0" aria-hidden="true" />
-        </Button>
-    {/if}
-{/snippet}
-
 <Card.Root id={anchorId} class="mx-auto w-full bg-card-bg scroll-mt-6 {searchMode ? '' : 'aspect-[1.1/1]'}">
     <Card.Header class="-mt-(--card-spacing) px-0">
         <Card.Title class="flex w-full items-start gap-2 bg-card-title text-left text-white text-xl px-(--card-spacing) py-5 rounded-t-xl">
@@ -123,7 +104,6 @@
                         <p class="text-sm">{result.description}</p>
                     {/if}
                 </div>
-                {@render goButton()}
             </div>
         {:else if result.description}
             <p class="text-sm">{result.description}</p>
