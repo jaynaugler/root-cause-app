@@ -1,7 +1,7 @@
 import { SEARCH_API_URL, SEARCH_API_KEY } from '$app/env/private';
 import { fail } from '@sveltejs/kit';
 import { z } from 'zod';
-import { RECENT_LIMIT, type SearchResponse, type SearchResult, type ThreadTurn } from '#lib/search.js';
+import { RECENT_LIMIT, SEARCH_LIMIT, type SearchResponse, type SearchResult, type ThreadTurn } from '#lib/search.js';
 import { browseArchive } from '#lib/server/search-api.js';
 // The question / history / filter checks are shared with the filter panels' route
 import { parseFilters, parseHistory, searchSchema } from '#lib/server/search-params.js';
@@ -38,7 +38,7 @@ export const actions: Actions = {
 			response = await fetch(`${SEARCH_API_URL}/api/search`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json', 'X-API-Key': SEARCH_API_KEY },
-				body: JSON.stringify({ question, history, filters, summary, offset }),
+				body: JSON.stringify({ question, history, filters, summary, offset, limit: SEARCH_LIMIT }),
 				// Summaries from Ollama can take a while
 				signal: AbortSignal.timeout(90_000)
 			});
