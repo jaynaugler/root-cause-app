@@ -20,7 +20,8 @@ Content-Type: application/json
   "provider": "gemini",
   "history": [
     { "question": "Who was Viola Desmond?", "summary": "Viola Desmond was a businesswoman who … [1]" }
-  ]
+  ],
+  "filters": { "contentcategory": ["people", "events"] }
 }
 ```
 
@@ -30,6 +31,7 @@ Content-Type: application/json
 | `limit`    | no       | 1–20, default 8                          | How many records to return at most              |
 | `provider` | no       | `"ollama"` or `"gemini"`                 | Which AI writes the answer (default from settings) |
 | `history`  | no       | max 3 turns, oldest first; each `question` ≤ 500, `summary` ≤ 2000 chars | Earlier questions and answers, for follow-ups |
+| `filters`  | no       | keys only `contentcategory`, `attribution`, `resourceformat`; max 20 values each, 1–200 chars | Only records with these values (the checkboxes). See [Filters](#filters-and-counts-facets) |
 
 **Response**
 
@@ -41,13 +43,19 @@ Content-Type: application/json
     { "id": "…", "title": "…", "description": "…", "attribution": "…", "link": "…",
       "resourceformat": "pdf", "contentcategory": "history", "imgurl": null,
       "createdAt": "…", "_rankingScore": 0.83 }
-  ]
+  ],
+  "facets": {
+    "contentcategory": { "people": 12, "history": 7, "uncategorized": 24 },
+    "attribution": { "Black Cultural Centre for Nova Scotia": 43 },
+    "resourceformat": { "pdf": 43 }
+  }
 }
 ```
 
 - `summary` is `null` when nothing was found, or when both AI providers failed. The `results` are
   still returned in that case.
 - `provider` is the AI that **actually** answered. It can differ from the one asked for (see fallback).
+- `facets` counts **all** matching records per value, not only the `limit` shown.
 
 **Errors:** `401` wrong key · `422` request breaks a rule above · `502` Meilisearch failed.
 
@@ -58,13 +66,14 @@ POST /api/search
    │
    ├─ 1. check X-API-Key ─────────────────────────── wrong → 401
    ├─ 2. build search text: last 2 earlier questions + new question
-   ├─ 3. Meilisearch hybrid search (keywords + meaning) ── error → 502
-   │       → hits with score ≥ 0.6, at most `limit`
+   ├─ 3. Meilisearch hybrid search (keywords + meaning, + filters) ── error → 502
+   │       → hits with score ≥ 0.7 (nothing? again with ≥ 0.6), at most `limit`
+   │       → counts per filter value (facets)
    ├─ 4. no hits? → summary = null, skip to 6
    ├─ 5. build prompt (history + top 5 hits + question)
    │       → Gemini (if chosen) ──fails──► Ollama ──fails──► summary = null
    │       → trim answer to 2000 characters
-   └─ 6. return { summary, provider, results }
+   └─ 6. return { summary, provider, results, facets }
 ```
 
 ### 0. Validation, before our code even runs
@@ -125,6 +134,30 @@ how keyword and meaning results are mixed, not the score the threshold is compar
 
 The threshold stays **inside Meilisearch** on purpose: Meilisearch applies it to the facet counts
 too. Filtering hits in Python afterwards would make the counts disagree with the results.
+
+### Filters and counts (facets)
+
+`filters` from the request becomes Meilisearch's filter text in `build_filter()`:
+
+```
+{"contentcategory": ["people", "events"], "attribution": ["BCCNS"]}
+→ contentcategory IN ["people", "events"] AND attribution IN ["BCCNS"]
+```
+
+**OR** between the values of one field, **AND** between fields, the way shop filters work.
+
+**Safety:** the caller never sends filter text. pydantic accepts only the field names in
+`FacetField`, and `quote()` escapes `\` and `"` in every value. So a value like
+`People" OR 1=1` stays one harmless value instead of changing the filter (same idea as SQL
+injection).
+
+Every search also sends `"facets": [...]`, so Meilisearch returns how many matching records have
+each value (`facetDistribution`). We return it as `facets`. Hits and counts come from the **same**
+search (also when the 0.6 fallback runs), and Meilisearch applies the threshold to both, so they
+always agree.
+
+**Known limit:** when a box is checked, the other values of *that* field drop out of the counts
+(check "people" and "history" shows no number). Fixing this needs a second count per field.
 
 We use `MEILI_SEARCH_KEY`, a key that can **only search**. Even if search-api had a bug, it
 couldn't change the index.
