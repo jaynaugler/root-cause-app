@@ -592,9 +592,9 @@
 						{plural(turn.results.length, 'record')} found
 					{/if}
 				</summary>
-				<div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+				<div class="mt-3 grid grid-cols-1 gap-3">
 					{#each turn.results as result, i (result.id)}
-						<ResultsCard {result} number={i + 1} anchorId="t{t}-result-{i + 1}" />
+						<ResultsCard {result} number={i + 1} anchorId="t{t}-result-{i + 1}" searchMode />
 					{/each}
 				</div>
 			</details>
@@ -608,8 +608,10 @@
 			class="scroll-mt-6 space-y-4 {pending.mode === 'followup' ? FILL_SCREEN : ''}"
 			aria-live="polite"
 		>
-			<h2 class="text-lg font-medium">{pending.question}</h2>
-			<div class="space-y-2 rounded-xl border p-6">
+			{#if pending.mode === 'followup'}
+				<h2 class="text-lg font-medium">{pending.question}</h2>
+			{/if}
+			<div class="space-y-2 rounded-xl border bg-white p-6">
 				<div class="h-4 w-3/4 animate-pulse rounded bg-muted"></div>
 				<div class="h-4 w-full animate-pulse rounded bg-muted"></div>
 				<div class="h-4 w-2/3 animate-pulse rounded bg-muted"></div>

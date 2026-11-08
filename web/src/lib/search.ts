@@ -18,6 +18,7 @@ export interface SearchResult {
 	id: string;
 	title?: string;
 	description?: string;
+	summary?: string;
 	attribution?: string;
 	link?: string;
 	sitelink?: string;
