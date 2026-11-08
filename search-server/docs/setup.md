@@ -83,6 +83,30 @@ curl -s http://127.0.0.1:7700/tasks?limit=1 -H "Authorization: Bearer $MEILI_MAS
 # look for "status":"succeeded"
 ```
 
+### Allow filtering by category, attribution and format (facets)
+
+By default Meilisearch can't filter or count by any field. This request tells it which fields the
+search page may filter by (the checkboxes, with a count next to each value):
+
+```bash
+curl -X PUT http://127.0.0.1:7700/indexes/records/settings/filterable-attributes \
+  -H "Authorization: Bearer $MEILI_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  --data '["contentcategory", "attribution", "resourceformat"]'
+```
+
+- Meilisearch builds an extra internal index for these fields. With many records this takes a
+  moment; check `/tasks?limit=1` as above.
+- To add a field later, send the **whole** list again, and add it to `FacetField` in `main.py`. `PUT` replaces the
+  list; it doesn't add to it.
+- **Order matters: run this request first, then deploy `main.py`.** search-api asks Meilisearch to
+  count every field in `FacetField`. If one of them isn't in this list yet, Meilisearch rejects
+  **every** search, and search-api answers `502`. The log then says
+  `Meilisearch error 400: ... Pattern 'xyz' is not filterable`.
+- The search key needs no change: the `search` permission covers filters and counts.
+- Records without a category are stored as `"uncategorized"` by sync, because Meilisearch can't
+  filter or count empty values.
+
 ## 3. Create the Meilisearch keys
 
 Each app gets its own key with **only the permissions it needs**. If a key leaks, the damage stays

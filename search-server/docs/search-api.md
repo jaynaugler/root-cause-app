@@ -20,7 +20,8 @@ Content-Type: application/json
   "provider": "gemini",
   "history": [
     { "question": "Who was Viola Desmond?", "summary": "Viola Desmond was a businesswoman who … [1]" }
-  ]
+  ],
+  "filters": { "contentcategory": ["people", "events"] }
 }
 ```
 
@@ -30,6 +31,8 @@ Content-Type: application/json
 | `limit`    | no       | 1–20, default 8                          | How many records to return at most              |
 | `provider` | no       | `"ollama"` or `"gemini"`                 | Which AI writes the answer (default from settings) |
 | `history`  | no       | max 3 turns, oldest first; each `question` ≤ 500, `summary` ≤ 2000 chars | Earlier questions and answers, for follow-ups |
+| `summary`  | no       | `true` (default) or `false`              | `false` skips the AI: only records and counts, in milliseconds (used for filter clicks) |
+| `filters`  | no       | keys only `contentcategory`, `attribution`, `resourceformat`; max 20 values each, 1–200 chars | Only records with these values (the checkboxes). See [Filters](#filters-and-counts-facets) |
 
 **Response**
 
@@ -41,13 +44,19 @@ Content-Type: application/json
     { "id": "…", "title": "…", "description": "…", "attribution": "…", "link": "…",
       "resourceformat": "pdf", "contentcategory": "history", "imgurl": null,
       "createdAt": "…", "_rankingScore": 0.83 }
-  ]
+  ],
+  "facets": {
+    "contentcategory": { "people": 12, "history": 7, "uncategorized": 24 },
+    "attribution": { "Black Cultural Centre for Nova Scotia": 43 },
+    "resourceformat": { "pdf": 43 }
+  }
 }
 ```
 
 - `summary` is `null` when nothing was found, or when both AI providers failed. The `results` are
   still returned in that case.
 - `provider` is the AI that **actually** answered. It can differ from the one asked for (see fallback).
+- `facets` counts **all** matching records per value, not only the `limit` shown.
 
 **Errors:** `401` wrong key · `422` request breaks a rule above · `502` Meilisearch failed.
 
@@ -58,13 +67,14 @@ POST /api/search
    │
    ├─ 1. check X-API-Key ─────────────────────────── wrong → 401
    ├─ 2. build search text: last 2 earlier questions + new question
-   ├─ 3. Meilisearch hybrid search (keywords + meaning) ── error → 502
-   │       → hits with score ≥ 0.6, at most `limit`
-   ├─ 4. no hits? → summary = null, skip to 6
+   ├─ 3. Meilisearch hybrid search (keywords + meaning, + filters, as one /multi-search) ── error → 502
+   │       → hits with score ≥ 0.7 (nothing? again with ≥ 0.6), at most `limit`
+   │       → counts per filter value (facets)
+   ├─ 4. no hits, or "summary": false? → summary = null, skip to 6
    ├─ 5. build prompt (history + top 5 hits + question)
    │       → Gemini (if chosen) ──fails──► Ollama ──fails──► summary = null
    │       → trim answer to 2000 characters
-   └─ 6. return { summary, provider, results }
+   └─ 6. return { summary, provider, results, facets }
 ```
 
 ### 0. Validation, before our code even runs
@@ -105,13 +115,84 @@ We send one request to Meilisearch's `records` index:
 | ------------------------------- | ----------------- | ------------------------------------------------------------------- |
 | `hybrid.embedder`               | `"default"`       | The embedder created during [setup](setup.md#2-create-the-index-and-the-embedder) |
 | `hybrid.semanticRatio`          | `0.5`             | 0 = keywords only, 1 = meaning only. 0.5 mixes both equally         |
-| `rankingScoreThreshold`         | `0.6`             | Drop weak matches (score is 0–1), so the AI isn't fed unrelated records |
+| `rankingScoreThreshold`         | `0.7`, then `0.6` | Drop weak matches (score is 0–1), so the AI isn't fed unrelated records. See below |
 | `showRankingScore`              | `true`            | Each hit includes `_rankingScore`; useful for debugging and in the UI |
 | `limit`                         | from the request  | At most this many hits                                             |
 
 **Why hybrid?** Keyword search is good at exact things: names, places, "1916". Meaning search
 ("semantic") is good when the words differ: "cinema" vs "theatre", or English vs French. Hybrid
-combines both scores.
+combines both.
+
+**Why 0.7, with a second try at 0.6?** All records are about the same topic, so the meaning
+search gives almost *every* record about 0.6–0.68 for any question. At 0.6, "Who is Viola Desmond"
+returned 20 records. At 0.7 it returns only Viola (0.85). But questions that only match by meaning
+score lower: "ségrégation au cinéma" finds Viola at exactly 0.70. So when 0.7 finds **nothing**,
+we search once more with `FALLBACK_THRESHOLD` (0.6): better a few loose matches than "nothing
+found". Measured on 61 records (Nov 2026); re-check when the collection grows.
+
+`semanticRatio` turned out **not** to help here: 0.5, 0.3 and 0.2 gave the same scores. It changes
+how keyword and meaning results are mixed, not the score the threshold is compared with.
+
+The threshold stays **inside Meilisearch** on purpose: Meilisearch applies it to the facet counts
+too. Filtering hits in Python afterwards would make the counts disagree with the results.
+
+### Filters and counts (facets)
+
+`filters` from the request becomes Meilisearch's filter text in `build_filter()`:
+
+```
+{"contentcategory": ["people", "events"], "attribution": ["BCCNS"]}
+→ contentcategory IN ["people", "events"] AND attribution IN ["BCCNS"]
+```
+
+**OR** between the values of one field, **AND** between fields, the way shop filters work.
+
+**Safety:** the caller never sends filter text. pydantic accepts only the field names in
+`FacetField`, and `quote()` escapes `\` and `"` in every value. So a value like
+`People" OR 1=1` stays one harmless value instead of changing the filter (same idea as SQL
+injection).
+
+We also send `"facets": [...]`, so Meilisearch returns how many matching records have each value
+(`facetDistribution`). We return it as `facets`.
+
+**Counting a field without its own filter** (`build_searches()`). If the user checks "people",
+a normal search would count only people, and "history (7)" would disappear, so the user couldn't
+add it. Shops count each group **without its own checkboxes** (they are alternatives, OR), but
+**with** the other groups' checkboxes (AND). Example with "people" and "pdf" checked:
+
+| Search | Filter | Used for |
+| ------ | ------ | -------- |
+| main | people AND pdf | `results` only (`limit` from the request, e.g. 8) |
+| count 1 | people AND pdf | counts of fields with nothing checked (`attribution`) |
+| count 2 | only pdf | counts of `contentcategory` |
+| count 3 | only people | counts of `resourceformat` |
+
+All of them go to Meilisearch in **one** request (`/multi-search`): the main search, one count
+search for the fields with nothing checked, and one per field with checked values. Without
+filters that's 2 searches.
+
+**Why counts never come from the main search, and why the count searches use `limit: 1000`:**
+Meilisearch applies the score threshold only to records it actually *ranks*, and it stops
+ranking after `limit` records. If more records pass the threshold than `limit` allows, it never
+reaches the weak ones, so it can't exclude them, and they end up in the counts. Example (3 good
+matches, 57 weak ones, threshold 0.7):
+
+| `limit` | Count for "book" |
+| ------- | ---------------- |
+| 1, 2, 3 | 57 (wrong, includes the weak matches) |
+| 4 or more | 1 (right) |
+
+So the count searches rank up to `COUNT_LIMIT` = 1000 records (Meilisearch's maximum) and return
+only each record's `id`. Counts are exact as long as fewer than 1000 records pass the threshold.
+Not `limit: 0`: that makes Meilisearch skip the meaning half of a hybrid search, so records that
+only match by meaning would be missing.
+
+All searches use the **same** threshold. If the main search finds nothing at 0.7, the whole set is
+re-run at 0.6. Meilisearch applies the threshold to hits and counts alike, so the counts always
+describe the results the user sees.
+
+Meilisearch leaves out values with 0 matches. A checked value can therefore be missing from
+`facets`; the UI must still show it (as 0) so the user can uncheck it.
 
 We use `MEILI_SEARCH_KEY`, a key that can **only search**. Even if search-api had a bug, it
 couldn't change the index.
@@ -177,7 +258,8 @@ Read from environment variables when the container starts. To change one, set it
 | `MEILI_URL`        | `http://meilisearch:7700`  | yes             | Where Meilisearch is                             |
 | `MEILI_SEARCH_KEY` | (required)                 | from `.env`     | Search-only Meilisearch key                      |
 | `SEMANTIC_RATIO`   | `0.5`                      | no              | Keyword vs meaning mix (0–1)                     |
-| `SCORE_THRESHOLD`  | `0.6`                      | no              | Minimum match score (0–1)                        |
+| `SCORE_THRESHOLD`  | `0.7`                      | yes (`0.7`)     | Minimum match score (0–1)                        |
+| `FALLBACK_THRESHOLD` | `0.6`                    | yes (`0.6`)     | Second try when nothing reaches `SCORE_THRESHOLD`. Same value = off |
 | `SUMMARY_PROVIDER` | `ollama`                   | yes (`ollama`)  | Default AI: `ollama` or `gemini`                 |
 | `SUMMARY_SOURCES`  | `5`                        | no              | How many top hits go into the prompt             |
 | `OLLAMA_URL`       | `http://ollama:11434`      | no              | Where Ollama is                                  |

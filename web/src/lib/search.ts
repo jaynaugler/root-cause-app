@@ -32,5 +32,8 @@ export interface HistoryTurn {
 	summary: string | null;
 }
 
+// Longest question the search API accepts (max_length in search-server/search-api/main.py).
+// Mirrored in the zod schema in routes/+page.server.ts.
+export const MAX_QUESTION_CHARS = 500;
 export const MAX_HISTORY = 3;
 export const MAX_SUMMARY_CHARS = 2000;

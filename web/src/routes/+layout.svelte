@@ -5,7 +5,8 @@
 	import Footer from '#lib/components/site/Footer.svelte'; // NEW
 	import type { LayoutProps } from './$types';
 
-	let { children }: LayoutProps = $props();
+	// data.user comes from +layout.server.ts (null when logged out).
+	let { children, data }: LayoutProps = $props();
 </script>
 
 <svelte:head>
@@ -13,7 +14,7 @@
 </svelte:head>
 
   <div class="flex min-h-screen flex-col bg-[#FBF7F2]"><!-- NEW -->
-	<Header />
+	<Header user={data.user} />
 
 	<div class="flex-1"> <!-- NEW -->
 		{@render children()}

@@ -2,7 +2,7 @@ import logging
 import os
 import re
 import secrets
-from typing import Literal
+from typing import Annotated, Literal, get_args
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException
@@ -15,7 +15,18 @@ MEILI_URL = os.environ.get("MEILI_URL", "http://meilisearch:7700")
 MEILI_SEARCH_KEY = os.environ["MEILI_SEARCH_KEY"]
 API_KEY = os.environ["API_KEY"]
 SEMANTIC_RATIO = float(os.environ.get("SEMANTIC_RATIO", "0.5"))
-SCORE_THRESHOLD = float(os.environ.get("SCORE_THRESHOLD", "0.6"))
+SCORE_THRESHOLD = float(os.environ.get("SCORE_THRESHOLD", "0.7"))
+# Used only when SCORE_THRESHOLD finds nothing (e.g. questions in other words or in French,
+# which score lower). Set it equal to SCORE_THRESHOLD to turn the second try off.
+FALLBACK_THRESHOLD = float(os.environ.get("FALLBACK_THRESHOLD", "0.6"))
+# Fields the search page can filter by (the checkboxes). Must match the
+# filterableAttributes set in Meilisearch, see docs/setup.md.
+FacetField = Literal["contentcategory", "attribution", "resourceformat"]
+FACET_FIELDS = list(get_args(FacetField))
+# How many records a count search ranks. Meilisearch applies the score threshold only to records
+# it ranks, and it stops ranking after `limit`. Counts are therefore only exact when `limit` is
+# larger than the number of good matches. 1000 = Meilisearch's maximum (maxTotalHits).
+COUNT_LIMIT = 1000
 
 # Summary settings
 SUMMARY_PROVIDER = os.environ.get("SUMMARY_PROVIDER", "ollama")
@@ -60,6 +71,69 @@ class SearchRequest(BaseModel):
     limit: int = Field(default=8, ge=1, le=20)
     provider: Literal["ollama", "gemini"] | None = None
     history: list[Turn] = Field(default_factory=list, max_length=3)  # oldest first
+    # {"contentcategory": ["people", "events"]}: only known fields, at most 20 short values each
+    filters: dict[
+        FacetField,
+        Annotated[list[Annotated[str, Field(min_length=1, max_length=200)]], Field(max_length=20)],
+    ] = Field(default_factory=dict)
+    # false = skip the AI: records and counts come back in milliseconds. The web app uses
+    # this when a filter is clicked, then asks again with a summary once the clicking stops.
+    summary: bool = True
+
+
+def quote(value):
+    """Put a value in double quotes for a Meilisearch filter, escaping \\ and " inside it,
+    so a value can never end the quotes early and change the filter."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def build_filter(filters):
+    """{"contentcategory": ["people", "events"], "attribution": ["BCCNS"]}
+    → 'contentcategory IN ["people", "events"] AND attribution IN ["BCCNS"]'
+    OR between values of one field, AND between fields. None = no filter."""
+    parts = [
+        f"{field} IN [{', '.join(quote(v) for v in values)}]"
+        for field, values in filters.items()
+        if values
+    ]
+    return " AND ".join(parts) or None
+
+
+def with_filter(query, filters):
+    """Copy of a Meilisearch query with the filter for `filters` added (none if empty)."""
+    search_filter = build_filter(filters)
+    return {**query, "filter": search_filter} if search_filter else dict(query)
+
+
+def build_searches(body, filters):
+    """The main search (the records shown), plus the searches that count the filter values.
+
+    Counts never come from the main search: it ranks only `limit` (e.g. 8) records, and
+    Meilisearch would then count weak matches below the threshold too (see COUNT_LIMIT).
+    - one count search for all fields WITHOUT checked values, with all filters
+    - one count search per field WITH checked values, with every filter EXCEPT its own: with
+      "people" checked, the category counts still show "history (7)". The values of one field
+      are alternatives (OR), so checking one mustn't hide the others. Other fields still apply.
+    Returns (searches, counted): searches[0] is the main one; searches[i + 1] counts the
+    fields in counted[i].
+    """
+    checked = [field for field, values in filters.items() if values]
+    unchecked = [field for field in FACET_FIELDS if field not in checked]
+    # Only the counts are used: return just the id of each ranked record, to keep it small.
+    # (Not limit 0: that makes Meilisearch skip the meaning half of a hybrid search.)
+    count = {**body, "limit": COUNT_LIMIT, "attributesToRetrieve": ["id"], "showRankingScore": False}
+
+    searches = [with_filter(body, filters)]
+    counted = []
+    if unchecked:
+        searches.append(with_filter({**count, "facets": unchecked}, filters))
+        counted.append(unchecked)
+    for field in checked:
+        other_filters = {f: v for f, v in filters.items() if f != field}
+        searches.append(with_filter({**count, "facets": [field]}, other_filters))
+        counted.append([field])
+    return searches, counted
 
 
 def search_text(question, history):
@@ -165,6 +239,27 @@ def health():
     return {"status": "ok"}
 
 
+async def meili_search(client, searches, threshold):
+    """Run several searches in ONE request (Meilisearch /multi-search), all keeping only hits
+    that score at least `threshold`. Returns Meilisearch's answer for each search, in the
+    same order: "hits" and the facet counts ("facetDistribution")."""
+    queries = [
+        {**search, "indexUid": "records", "rankingScoreThreshold": threshold}
+        for search in searches
+    ]
+    r = await client.post(
+        f"{MEILI_URL}/multi-search",
+        json={"queries": queries},
+        headers={"Authorization": f"Bearer {MEILI_SEARCH_KEY}"},
+    )
+    if r.status_code != 200:
+        # Log Meilisearch's own message (e.g. "attribute X is not filterable"); the caller
+        # only gets a generic error.
+        logger.warning("Meilisearch error %s: %s", r.status_code, r.text[:500])
+        raise HTTPException(status_code=502, detail="Search engine error")
+    return r.json()["results"]
+
+
 @app.post("/api/search")
 async def search(req: SearchRequest, x_api_key: str = Header(default="")):
     # 1. Check the API key
@@ -172,25 +267,33 @@ async def search(req: SearchRequest, x_api_key: str = Header(default="")):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     # 2. Search Meilisearch (earlier questions help with "she", "it", etc.)
+    #    Strict threshold first; if that finds nothing, one more try with the looser one.
+    #    Filters and counts: see build_searches().
     body = {
         "q": search_text(req.question, req.history),
         "hybrid": {"embedder": "default", "semanticRatio": SEMANTIC_RATIO},
         "limit": req.limit,
-        "rankingScoreThreshold": SCORE_THRESHOLD,
         "showRankingScore": True,
     }
+    searches, counted = build_searches(body, req.filters)
     async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.post(
-            f"{MEILI_URL}/indexes/records/search",
-            json=body,
-            headers={"Authorization": f"Bearer {MEILI_SEARCH_KEY}"},
-        )
-    if r.status_code != 200:
-        raise HTTPException(status_code=502, detail="Search engine error")
-    hits = r.json()["hits"]
+        results = await meili_search(client, searches, SCORE_THRESHOLD)
+        if not results[0]["hits"] and FALLBACK_THRESHOLD < SCORE_THRESHOLD:
+            # The count searches are re-run too: hits and counts use the same threshold
+            results = await meili_search(client, searches, FALLBACK_THRESHOLD)
+    hits = results[0]["hits"]
+    # Collect the counts from the count searches (see build_searches)
+    facets = {}
+    for fields, result in zip(counted, results[1:]):
+        distribution = result.get("facetDistribution", {})
+        for field in fields:
+            facets[field] = distribution.get(field, {})
 
-    # 3. Summary: the request's choice, or the default
-    provider = req.provider or SUMMARY_PROVIDER
-    summary, used = await summarize(req.question, hits, provider, req.history)
+    # 3. Summary: the request's choice, or the default (uses the filtered hits).
+    #    Skipped when the caller only wants records and counts.
+    summary, used = None, None
+    if req.summary:
+        provider = req.provider or SUMMARY_PROVIDER
+        summary, used = await summarize(req.question, hits, provider, req.history)
 
-    return {"summary": summary, "provider": used, "results": hits}
+    return {"summary": summary, "provider": used, "results": hits, "facets": facets}
