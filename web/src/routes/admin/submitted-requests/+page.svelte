@@ -22,6 +22,9 @@
 		name: string | null;
 		email: string | null;
 		description: string | null;
+		generatedDescription: string | null;
+		submittedSummary: string | null;
+		summary: string | null;
 		link: string | null;
 		sitelink: string | null;
 		attachmentName: string | null;
@@ -44,10 +47,14 @@
 	let editLink = $state('');
 	let editSitelink = $state('');
 	let editDescription = $state('');
+	let editSubmittedSummary = $state('');
+	let editGeneratedDescription = $state('');
+	let editSummary = $state('');
 	let editAttachmentName = $state('');
 	let editAttachmentUrl = $state('');
 
 	let actionLoading = $state<string | null>(null);
+	const URL_PATTERN = /^https?:\/\/\S+$/;
 
 	function getDocumentUrl(item: PendingSubmission): string | null {
 		if (item.attachmentUrl) return item.attachmentUrl;
@@ -113,6 +120,9 @@
 		editLink = item.link ?? '';
 		editSitelink = item.sitelink ?? '';
 		editDescription = item.description ?? '';
+		editSubmittedSummary = item.submittedSummary ?? '';
+		editGeneratedDescription = item.generatedDescription ?? '';
+		editSummary = item.summary ?? '';
 		editAttachmentName = item.attachmentName ?? '';
 		editAttachmentUrl = item.attachmentUrl ?? '';
 	}
@@ -143,6 +153,22 @@
 			alert('Submission must have either a resource link or an attached document.');
 			return;
 		}
+		if (editLink.trim() && !URL_PATTERN.test(editLink.trim())) {
+			alert('Resource link must be a full URL starting with http:// or https://.');
+			return;
+		}
+		if (editSitelink.trim() && !URL_PATTERN.test(editSitelink.trim())) {
+			alert('Site link must be a full URL starting with http:// or https://.');
+			return;
+		}
+		if (editSubmittedSummary.trim() && editSubmittedSummary.trim().length < 250) {
+			alert('The submitter summary must contain at least 250 characters, or be left blank.');
+			return;
+		}
+		if (editSummary.trim() && editSummary.trim().length < 250) {
+			alert('The summary must contain at least 250 characters, or be left blank.');
+			return;
+		}
 
 		actionLoading = id;
 		try {
@@ -152,6 +178,9 @@
 				link: editLink.trim() || null,
 				sitelink: editSitelink.trim() || null,
 				description: editDescription.trim() || null,
+				submitted_summary: editSubmittedSummary.trim() || null,
+				generated_description: editGeneratedDescription.trim() || null,
+				summary: editSummary.trim() || null,
 				attachment_name: editAttachmentName.trim() || null,
 				attachment_url: editAttachmentUrl.trim() || null
 			};
@@ -175,6 +204,9 @@
 							link: payload.link,
 							sitelink: payload.sitelink,
 							description: payload.description,
+								submittedSummary: payload.submitted_summary,
+								generatedDescription: payload.generated_description,
+								summary: payload.summary,
 							attachmentName: payload.attachment_name,
 							attachmentUrl: payload.attachment_url
 						};
@@ -363,7 +395,7 @@
 										onclick={() => approveItem(item.id)}
 									>
 										<CheckIcon class="size-3.5" />
-										{actionLoading === item.id ? 'Running Pipeline…' : 'Approve & Process'}
+										{actionLoading === item.id ? 'Approving…' : 'Approve'}
 									</Button>
 								</div>
 							</div>
@@ -443,13 +475,45 @@
 								</div>
 							{/if}
 
-							<!-- SUBMITTER NOTES / DESCRIPTION -->
-							{#if item.description}
-								<div class="rounded-lg bg-muted/30 p-3 text-xs leading-relaxed border border-border/50">
-									<span class="font-bold text-muted-foreground uppercase text-[10px] block mb-1">
-										Submitter Notes & Description:
+							<!-- GENERATED PUBLIC METADATA -->
+							<div class="space-y-3 rounded-lg border border-orange-200/70 bg-orange-50/30 p-3 text-xs leading-relaxed">
+								<div>
+									<span class="mb-1 block text-[10px] font-bold uppercase text-muted-foreground">
+										Generated Description:
 									</span>
-									<p class="text-foreground whitespace-pre-wrap">{item.description}</p>
+									<p class="whitespace-pre-wrap text-foreground">
+										{item.generatedDescription || 'No generated description. Use Edit to add one.'}
+									</p>
+								</div>
+								<div>
+									<span class="mb-1 block text-[10px] font-bold uppercase text-muted-foreground">
+										Generated Summary:
+									</span>
+									<p class="whitespace-pre-wrap text-foreground">
+										{item.summary || 'No generated summary. Use Edit to add one before approving.'}
+									</p>
+								</div>
+							</div>
+
+							<!-- SUBMITTER NOTES / DESCRIPTION -->
+							{#if item.description || item.submittedSummary}
+								<div class="space-y-3 rounded-lg border border-border/50 bg-muted/30 p-3 text-xs leading-relaxed">
+									{#if item.description}
+										<div>
+											<span class="mb-1 block text-[10px] font-bold uppercase text-muted-foreground">
+												Submitter Notes & Description:
+											</span>
+											<p class="whitespace-pre-wrap text-foreground">{item.description}</p>
+										</div>
+									{/if}
+									{#if item.submittedSummary}
+										<div>
+											<span class="mb-1 block text-[10px] font-bold uppercase text-muted-foreground">
+												Submitter Summary:
+											</span>
+											<p class="whitespace-pre-wrap text-foreground">{item.submittedSummary}</p>
+										</div>
+									{/if}
 								</div>
 							{/if}
 
@@ -555,25 +619,25 @@
 
 									<!-- Resource Link -->
 									<div class="space-y-1">
-										<Label for={`link-${item.id}`} class="text-xs font-semibold">Resource Link (Optional if Document Attached)</Label>
+										<Label for={`link-${item.id}`} class="text-xs font-semibold">Resource link (optional if a document is attached)</Label>
 										<Input
 											id={`link-${item.id}`}
 											type="url"
 											class="bg-background text-xs"
 											bind:value={editLink}
-											placeholder="https://..."
+											placeholder="Direct link to the PDF, e.g. https://bccns.com/download/2468/"
 										/>
 									</div>
 
 									<!-- Site Link -->
 									<div class="space-y-1">
-										<Label for={`site-${item.id}`} class="text-xs font-semibold">Host Site Link</Label>
+										<Label for={`site-${item.id}`} class="text-xs font-semibold">Site link (optional)</Label>
 										<Input
 											id={`site-${item.id}`}
 											type="url"
 											class="bg-background text-xs"
 											bind:value={editSitelink}
-											placeholder="https://..."
+											placeholder="e.g. https://bccns.com/resources/"
 										/>
 									</div>
 
@@ -588,6 +652,53 @@
 											class="flex w-full rounded-md border border-input bg-background p-2 text-xs shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
 											bind:value={editDescription}
 											placeholder="User's explanation of what this record is..."
+										></textarea>
+									</div>
+
+									<!-- Submitter Summary -->
+									<div class="space-y-1 md:col-span-2">
+										<Label for={`submitted-summary-${item.id}`} class="text-xs font-semibold">
+											Submitter Summary
+										</Label>
+										<textarea
+											id={`submitted-summary-${item.id}`}
+											rows={5}
+											minlength={250}
+											maxlength={2000}
+											class="flex w-full rounded-md border border-input bg-background p-2 text-xs shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+											bind:value={editSubmittedSummary}
+											placeholder="Summary supplied by the submitter, if any..."
+										></textarea>
+									</div>
+
+									<!-- Generated Public Description -->
+									<div class="space-y-1 md:col-span-2">
+										<Label for={`generated-desc-${item.id}`} class="text-xs font-semibold">
+											Generated Description (Public)
+										</Label>
+										<textarea
+											id={`generated-desc-${item.id}`}
+											rows={2}
+											maxlength={150}
+											class="flex w-full rounded-md border border-input bg-background p-2 text-xs shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+											bind:value={editGeneratedDescription}
+											placeholder="Short description shown on the public resource card..."
+										></textarea>
+									</div>
+
+									<!-- Generated Public Summary -->
+									<div class="space-y-1 md:col-span-2">
+										<Label for={`summary-${item.id}`} class="text-xs font-semibold">
+											Generated Summary (Public)
+										</Label>
+										<textarea
+											id={`summary-${item.id}`}
+											rows={7}
+											minlength={250}
+											maxlength={2000}
+											class="flex w-full rounded-md border border-input bg-background p-2 text-xs shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+											bind:value={editSummary}
+											placeholder="At least 250 characters, or leave blank if the source cannot support a summary..."
 										></textarea>
 									</div>
 								</div>

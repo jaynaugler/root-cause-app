@@ -28,6 +28,8 @@ const RESOURCE_SCHEMA = {
 	],
 	properties: {
 		_id: { bsonType: 'objectId' },
+		name: { bsonType: ['string', 'null'], maxLength: 150 },
+		email: { bsonType: ['string', 'null'], maxLength: 255 },
 		title: { bsonType: ['string', 'null'], maxLength: 300 },
 		link: { bsonType: 'string', pattern: '^https?://', maxLength: 2000 },
 		// Optional (curator-supplied): the site page hosting the resource.
@@ -35,6 +37,7 @@ const RESOURCE_SCHEMA = {
 		description: { bsonType: ['string', 'null'], maxLength: 150 },
 		// Optional submitter context for pending review; removed on approval.
 		submittedDescription: { bsonType: ['string', 'null'], maxLength: 150 },
+		submittedSummary: { bsonType: ['string', 'null'], minLength: 250, maxLength: 2000 },
 		// minLength applies to strings only; null (fallback records) is still valid.
 		summary: { bsonType: ['string', 'null'], minLength: 250 },
 		attribution: { bsonType: ['string', 'null'] },

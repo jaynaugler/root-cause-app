@@ -16,10 +16,13 @@ import {
 // a client never chooses its own approval status).
 const insertSchema = z.object({
 	title: z.string().nullish(),
+	name: z.string().max(150).nullish(),
+	email: z.string().email().max(255).nullish(),
 	link: z.string(),
 	sitelink: z.string().nullish(),
 	description: z.string().nullish(),
 	submittedDescription: z.string().nullish(),
+	submittedSummary: z.string().min(MIN_SUMMARY_LENGTH).max(2000).nullish(),
 	summary: z.string().nullish(),
 	attribution: z.string().nullish(),
 	resourceformat: z.enum(RESOURCE_FORMATS),
@@ -67,7 +70,12 @@ export const POST: RequestHandler = async (event) => {
 			sitelink: data.sitelink ?? null,
 			description,
 			...(data.status === 'pending'
-				? { submittedDescription: data.submittedDescription ?? null }
+				? {
+						name: data.name ?? null,
+						email: data.email ?? null,
+						submittedDescription: data.submittedDescription ?? null,
+						submittedSummary: data.submittedSummary ?? null
+					}
 				: {}),
 			summary,
 			attribution: data.attribution ?? null,

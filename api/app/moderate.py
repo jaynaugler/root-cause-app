@@ -22,6 +22,9 @@ class ModifySubmissionPayload(BaseModel):
     link: str | None = Field(default=None, max_length=2000)
     sitelink: str | None = Field(default=None, max_length=2000)
     description: str | None = Field(default=None, max_length=2000)
+    generated_description: str | None = Field(default=None, max_length=150)
+    submitted_summary: str | None = Field(default=None, min_length=250, max_length=2000)
+    summary: str | None = Field(default=None, min_length=250, max_length=2000)
     attachment_name: str | None = Field(default=None, max_length=300)
     attachment_url: str | None = Field(default=None, max_length=2000)
 
@@ -54,6 +57,8 @@ async def get_pending_resources(limit: int = 100):
                     "email": 1,
                     "description": 1,
                     "submittedDescription": 1,
+                    "submittedSummary": 1,
+                    "summary": 1,
                     "link": 1,
                     "sitelink": 1,
                     "attachmentName": 1,
@@ -95,6 +100,9 @@ async def get_pending_resources(limit: int = 100):
                 "email": doc.get("email"),
                 # Legacy pending records kept submitter text in description.
                 "description": doc.get("submittedDescription", doc.get("description")),
+                "generatedDescription": doc.get("description"),
+                "submittedSummary": doc.get("submittedSummary"),
+                "summary": doc.get("summary"),
                 "link": doc.get("link"),
                 "sitelink": doc.get("sitelink"),
                 "attachmentName": attachment_name,
@@ -124,7 +132,15 @@ async def approve_resource(doc_id: str):
     try:
         await coll.update_one(
             {"_id": oid},
-            {"$set": update_data, "$unset": {"submittedDescription": ""}},
+            {
+                "$set": update_data,
+                "$unset": {
+                    "name": "",
+                    "email": "",
+                    "submittedDescription": "",
+                    "submittedSummary": "",
+                },
+            },
         )
     except PyMongoError as e:
         raise HTTPException(
@@ -164,9 +180,13 @@ async def modify_pending_resource(doc_id: str, payload: ModifySubmissionPayload)
         else:
             update_fields[k] = v
 
-    # Normalize submission-only and attachment field names if provided.
+    # Normalize public metadata, submission-only, and attachment field names.
+    if "submitted_summary" in update_fields:
+        update_fields["submittedSummary"] = update_fields.pop("submitted_summary")
     if "description" in update_fields:
         update_fields["submittedDescription"] = update_fields.pop("description")
+    if "generated_description" in update_fields:
+        update_fields["description"] = update_fields.pop("generated_description")
     if "attachment_name" in update_fields:
         update_fields["attachmentName"] = update_fields.pop("attachment_name")
     if "attachment_url" in update_fields:

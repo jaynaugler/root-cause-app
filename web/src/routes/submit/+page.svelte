@@ -70,12 +70,12 @@
 				// Public submissions go to the review queue, not straight to search.
 				body: JSON.stringify({
 					...meta,
+					name: name.trim(),
+					email: email.trim(),
 					sitelink: siteLink.trim() || null,
 					submittedDescription: description.trim() || null,
-					summary:
-						summary.trim() ||
-						meta.summary ||
-						(meta.description?.length > MAX_DESCRIPTION ? meta.description : null),
+					submittedSummary: summary.trim() || null,
+					summary: meta.summary || (meta.description?.length > MAX_DESCRIPTION ? meta.description : null),
 					status: 'pending'
 				})
 			});
