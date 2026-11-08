@@ -39,6 +39,9 @@ Two conversions are needed because Meilisearch only understands plain JSON:
 - Mongo's `_id` (an `ObjectId`) becomes a string `id`.
 - `createdAt` (a Python `datetime`) becomes an ISO text like `2026-11-07T10:00:00`.
 
+And one for the category filter: an empty `contentcategory` (`null`) becomes `"uncategorized"`,
+because Meilisearch can't filter or count empty values. The record in MongoDB stays unchanged.
+
 Meilisearch then creates the embedding (the "meaning" vector) for each new record by itself, from
 title and summary (or description when there is no summary). See [setup](setup.md#2-create-the-index-and-the-embedder).
 

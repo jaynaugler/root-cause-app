@@ -41,6 +41,8 @@ def to_meili(doc):
     record = {"id": str(doc["_id"])}
     for field in FIELDS:
         record[field] = doc.get(field)
+    # Facet filter: Meilisearch can't filter or count null, so give it a real value
+    record["contentcategory"] = record["contentcategory"] or "uncategorized"
     created = doc.get("createdAt")
     record["createdAt"] = created.isoformat() if isinstance(created, datetime) else created
     return record
