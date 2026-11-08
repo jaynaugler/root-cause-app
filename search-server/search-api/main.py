@@ -83,6 +83,7 @@ Filters = dict[
 class SearchRequest(BaseModel):
     question: str = Field(min_length=1, max_length=500)
     limit: int = Field(default=8, ge=1, le=20)
+    offset: int = Field(default=0, ge=0)
     provider: Literal["ollama", "gemini"] | None = None
     history: list[Turn] = Field(default_factory=list, max_length=3)  # oldest first
     filters: Filters = Field(default_factory=dict)
@@ -94,6 +95,7 @@ class SearchRequest(BaseModel):
 class BrowseRequest(BaseModel):
     """Browsing without a question: the newest records, filtered, with counts."""
     limit: int = Field(default=12, ge=1, le=50)
+    offset: int = Field(default=0, ge=0)
     filters: Filters = Field(default_factory=dict)
 
 
@@ -140,7 +142,7 @@ def count_body(body):
     """A count search for `body`: ranks up to COUNT_LIMIT records (see there). Only the counts
     are used, so it returns just the id of each ranked record, to keep the answer small.
     (Not limit 0: that makes Meilisearch skip the meaning half of a hybrid search.)"""
-    return {**body, "limit": COUNT_LIMIT, "attributesToRetrieve": ["id"], "showRankingScore": False}
+    return {**body, "offset": 0, "limit": COUNT_LIMIT, "attributesToRetrieve": ["id"], "showRankingScore": False}
 
 
 def without_own_filter(filters, field):
@@ -478,6 +480,7 @@ async def search(req: SearchRequest, x_api_key: str = Header(default="")):
         "q": search_text(req.question, req.history),
         "hybrid": {"embedder": "default", "semanticRatio": SEMANTIC_RATIO},
         "limit": req.limit,
+        "offset": req.offset,
         "showRankingScore": True,
     }
     searches, counted = build_searches(body, req.filters)
@@ -509,7 +512,7 @@ async def browse(req: BrowseRequest, x_api_key: str = Header(default="")):
     simply returns all records that pass the filters, here sorted newest first."""
     check_api_key(x_api_key)
 
-    body = {"q": "", "sort": ["createdAtTs:desc"], "limit": req.limit}
+    body = {"q": "", "sort": ["createdAtTs:desc"], "limit": req.limit, "offset": req.offset}
     # Same counting as in search(): each field is counted without its own filter
     searches, counted = build_searches(body, req.filters)
     async with httpx.AsyncClient(timeout=10) as client:

@@ -28,9 +28,10 @@ export async function browseArchive(
 	fetch: typeof globalThis.fetch,
 	filters: Filters,
 	limit: number,
+	offset = 0,
 	signal?: AbortSignal
 ): Promise<BrowseResponse> {
-	const response = await postSearchApi(fetch, '/api/browse', { filters, limit }, signal);
+	const response = await postSearchApi(fetch, '/api/browse', { filters, limit, offset }, signal);
 	if (!response.ok) {
 		throw new Error(`search-api /api/browse answered ${response.status}: ${await response.text()}`);
 	}

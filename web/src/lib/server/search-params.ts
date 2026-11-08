@@ -103,5 +103,6 @@ export const facetsRequestSchema = z.object({
 
 // The JSON body of POST /browse: only the filters (the list length is fixed, RECENT_LIMIT)
 export const browseRequestSchema = z.object({
-	filters: z.unknown().default({}).transform(parseFiltersJson)
+	filters: z.unknown().default({}).transform(parseFiltersJson),
+	offset: z.number().int().nonnegative().default(0)
 });

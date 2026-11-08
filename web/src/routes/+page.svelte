@@ -7,10 +7,13 @@
 	import SearchBox from '#lib/components/search/SearchBox.svelte';
 	import FilterBar from '#lib/components/search/FilterBar.svelte';
 	import FacetPanel from '#lib/components/search/FacetPanel.svelte';
+	import Pagination from '#lib/components/search/Pagination.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import {
 		FACET_FIELDS,
 		MAX_HISTORY,
+		RECENT_LIMIT,
+		SEARCH_LIMIT,
 		activeFacetCount,
 		type BrowseResponse,
 		type FacetField,
@@ -171,11 +174,13 @@
 	async function askLatest(
 		filters: Filters,
 		withSummary: boolean,
-		signal: AbortSignal
+		signal: AbortSignal,
+		offset = 0
 	): Promise<ThreadTurn | null> {
 		const body = new FormData();
 		body.set('question', thread[thread.length - 1].question);
 		body.set('history', JSON.stringify(historyBefore(thread)));
+		body.set('offset', String(offset));
 		for (const field of FACET_FIELDS) {
 			for (const value of filters[field] ?? []) body.append(field, value);
 		}
@@ -231,11 +236,13 @@
 		summaryUpdating = false;
 		refineError = '';
 		refineStatus = null; // hidden until this change has arrived
+		moreStatus = '';
 		replaceLatest({ filters }); // the pill changes colour immediately
 		refining = true;
 		filterTimer = setTimeout(() => fetchRecords(id, filters), FILTER_DELAY);
 	}
 
+	// A filter change always goes back to page 1 (offset 0): the old page number may not exist
 	async function fetchRecords(id: number, filters: Filters) {
 		const answer = await askLatest(filters, false, newSignal());
 		if (id !== refineId) return; // a newer change or a new search took over
@@ -246,16 +253,50 @@
 			refineError = 'Could not apply the filter. Try again.';
 		} else if (!answer.results.length) {
 			// Nothing matches: nothing to summarise either
-			replaceLatest({ results: [], total: 0, facets: answer.facets, summary: null, provider: null, summaryStale: false });
+			replaceLatest({ results: [], total: 0, offset: 0, facets: answer.facets, summary: null, provider: null, summaryStale: false });
 			setStatus(false);
 		} else {
 			// The old summary stays visible but is marked stale: its [1], [2] meant other records
-			replaceLatest({ results: answer.results, total: answer.total, facets: answer.facets, summaryStale: true });
+			replaceLatest({ results: answer.results, total: answer.total, offset: 0, facets: answer.facets, summaryStale: true });
 			scheduleSummary(id);
 		}
 	}
 
-	// Step 2: rewrite the summary once the clicking has stopped
+	// "Show 8 more" under the newest answer: the next records are ADDED below the ones on
+	// screen, the summary stays as it is (no new AI call). It is about the best records, and
+	// those stay on top, so its [1], [2] always find their cards.
+	let loadingMore = $state(false);
+	let moreStatus = $state(''); // read out by screen readers: "8 more records shown"
+
+	function showMoreResults() {
+		const latest = thread[thread.length - 1];
+		const id = cancelRefine(); // also stops a summary still waiting after a filter change…
+		refineError = '';
+		moreStatus = '';
+		loadingMore = true;
+		fetchMore(id, (latest.offset ?? 0) + latest.results.length);
+	}
+
+	async function fetchMore(id: number, offset: number) {
+		const answer = await askLatest(activeFilters, false, newSignal(), offset);
+		loadingMore = false; // also when a newer change took over: that one replaces the records
+		if (id !== refineId) return;
+		if (answer) {
+			const latest = thread[thread.length - 1];
+			// Skip a record that is already shown (the ranking can shift a little between calls)
+			const shown = new Set(latest.results.map((record) => record.id));
+			const added = answer.results.filter((record) => !shown.has(record.id));
+			replaceLatest({ results: [...latest.results, ...added], total: answer.total, facets: answer.facets });
+			moreStatus = `${plural(added.length, 'more record')} shown.`;
+		} else {
+			refineError = 'Could not load more records. Try again.';
+		}
+		// …so it is started again here
+		if (thread.at(-1)?.summaryStale) scheduleSummary(id);
+	}
+
+	// Step 2: rewrite the summary once the clicking has stopped. Always from the best records
+	// (offset 0), however many are shown.
 	function scheduleSummary(id: number) {
 		clearTimeout(summaryTimer);
 		summaryUpdating = true;
@@ -263,12 +304,17 @@
 			const answer = await askLatest(activeFilters, true, newSignal());
 			if (id !== refineId) return;
 			summaryUpdating = false;
-			// Take the whole answer: records and summary come from the same search, so [n] match.
-			// If it failed, show "no summary" rather than one about other records.
+			const latest = thread[thread.length - 1];
+			// Only the first records shown: take the whole answer, records and summary come from
+			// the same search, so [n] match. More shown ("Show more"): only the summary, so the
+			// added records stay. If it failed, show "no summary" rather than one about other records.
+			const onlyFirst = !latest.offset && latest.results.length <= SEARCH_LIMIT;
 			replaceLatest(
-				answer
-					? { ...answer, summaryStale: false }
-					: { summary: null, provider: null, summaryStale: false }
+				!answer
+					? { summary: null, provider: null, summaryStale: false }
+					: onlyFirst
+						? { ...answer, offset: 0, summaryStale: false }
+						: { summary: answer.summary, provider: answer.provider, summaryStale: false }
 			);
 			setStatus(!!answer?.summary);
 		}, SUMMARY_DELAY);
@@ -281,6 +327,7 @@
 		summaryUpdating = false;
 		refineError = '';
 		refineStatus = null;
+		moreStatus = '';
 	}
 
 	// ---- Browsing: filters before the first question ----
@@ -292,6 +339,7 @@
 	let browseFilters = $state<Filters>({});
 	// The list after a filter change; null = still the one the page was loaded with (data.recent)
 	let browseResult = $state<BrowseResponse | null>(null);
+	let browseOffset = $state(0);
 	let browseLoading = $state(false);
 	let browseError = $state('');
 	let browseStatus = $state(''); // read out by screen readers once the list has changed
@@ -312,23 +360,30 @@
 		browseError = '';
 		browseStatus = '';
 		browseLoading = true;
-		browseTimer = setTimeout(() => fetchBrowse(filters), FILTER_DELAY);
+		browseTimer = setTimeout(() => fetchBrowse(filters, 0), FILTER_DELAY);
 	}
 
-	async function fetchBrowse(filters: Filters) {
+	async function fetchBrowse(
+		filters: Filters,
+		offset: number,
+		failMessage = 'Could not apply the filter. Try again.'
+	) {
 		const controller = new AbortController();
 		browseController = controller;
+		browseLoading = true;
+		browseError = '';
 		try {
 			const response = await fetch('/browse', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ filters }),
+				body: JSON.stringify({ filters, offset }),
 				signal: controller.signal
 			});
 			if (!response.ok) throw new Error(`status ${response.status}`);
 			const result = (await response.json()) as BrowseResponse;
 			if (controller !== browseController) return; // a newer change took over
 			browseResult = result;
+			browseOffset = offset;
 			const n = activeFacetCount(filters);
 			browseStatus = n
 				? `${plural(result.total, 'record')} match ${plural(n, 'filter')}.`
@@ -336,10 +391,19 @@
 		} catch {
 			if (controller.signal.aborted) return; // cancelled by a newer change
 			browseFilters = lastGoodBrowseFilters; // undo, the list didn't change
-			browseError = 'Could not apply the filter. Try again.';
+			browseError = failMessage;
 		} finally {
 			if (controller === browseController) browseLoading = false;
 		}
+	}
+
+	// Previous / Next under the list. Same filters, another slice of the list. (The buttons are
+	// disabled while the list is loading, so no filter change can be waiting at this point: the
+	// filters are the ones on screen, and a failure must keep them, not undo an older change.)
+	function changeBrowsePage(page: number) {
+		lastGoodBrowseFilters = browseFilters;
+		fetchBrowse(browseFilters, (page - 1) * RECENT_LIMIT, 'Could not load that page. Try again.');
+		scrollToTop('recent-records');
 	}
 
 	// ---- Changes from the filter bar: to the newest answer, or (no answer yet) to the list ----
@@ -398,6 +462,7 @@
 		browseStatus = '';
 		browseFilters = {};
 		browseResult = null; // back to the list the page was loaded with
+		browseOffset = 0;
 		thread = [];
 		form = null;
 		newQuestion = '';
@@ -478,6 +543,7 @@
 
 <main class="container mx-auto max-w-6xl px-4 pt-12 space-y-8">
 	<!-- Title + search box, as wide as the answers below -->
+	<section class="relative overflow-hidden bg-[#FF8C4B] px-4 pb-28 pt-8 text-center md:pb-32 md:pt-12">
 	<header class="space-y-4">
 		<div class="flex items-center justify-between gap-4">
 			<h1 class="text-2xl font-semibold">Search the archive</h1>
@@ -511,15 +577,19 @@
 			<p class="text-sm font-medium text-red-500">{refineError || browseError}</p>
 		{/if}
 	</header>
+	</section>
 
 	<!-- Browse list: the newest records (from search-api /api/browse, see +page.server.ts).
 	     Open on a fresh visit; collapses on search, then it's a toggle. -->
-	<details bind:open={recentsOpen} class="recents space-y-3">
+	<details id="recent-records" bind:open={recentsOpen} class="recents scroll-mt-6 space-y-3">
 		<summary class="cursor-pointer text-sm font-medium text-muted-foreground select-none">
 			Recent records
-			{#if recent.total > recent.results.length}
+			<!-- More than one page: which slice is shown, e.g. "· 13–24 of 70" -->
+			{#if recent.total > recent.results.length && recent.results.length}
 				<span class="font-normal">
-					· the newest {recent.results.length} of {recent.total}{browseFiltered ? ' matching' : ''}
+					· {browseOffset + 1}–{browseOffset + recent.results.length} of {recent.total}{browseFiltered
+						? ' matching'
+						: ''}
 				</span>
 			{:else if browseFiltered && recent.total}
 				<span class="font-normal">· {recent.total} matching</span>
@@ -535,9 +605,19 @@
 			{#if recent.results.length}
 				<div class="grid grid-cols-1 gap-3 md:grid-cols-3">
 					{#each recent.results as record, i (record.id)}
-						<ResultsCard result={record} number={i + 1} anchorId={'recent-' + i} />
+						<!-- Numbered across pages: page 2 starts at 13 -->
+						<ResultsCard result={record} number={browseOffset + i + 1} anchorId={'recent-' + i} />
 					{/each}
 				</div>
+				<!-- Under the cards, where you are after reading them. Hidden with a single page. -->
+				<Pagination
+					page={Math.floor(browseOffset / RECENT_LIMIT) + 1}
+					total={recent.total}
+					pageSize={RECENT_LIMIT}
+					loading={browseLoading}
+					label="Recent record pages"
+					onPage={changeBrowsePage}
+				/>
 			{:else if recent.failed}
 				<p class="text-sm text-muted-foreground">
 					Could not load the recent records. Searching may still work; try reloading the page
@@ -563,6 +643,7 @@
 	{#each visibleTurns as turn, t (t)}
 		{@const isLatest = t === visibleTurns.length - 1}
 		{@const found = turn.total ?? turn.results.length}
+		{@const offset = turn.offset ?? 0}
 		<!-- aria-busy: tells screen readers this part is being updated (after a filter change) -->
 		<article
 			id="turn-{t}"
@@ -586,17 +667,46 @@
 				class="group space-y-3 transition-opacity {isLatest && refining ? 'opacity-60' : ''}"
 			>
 				<summary class="cursor-pointer text-sm font-medium text-muted-foreground select-none">
-					{#if found > turn.results.length}
-						The {turn.results.length} best of {plural(found, 'record')}
+					<!-- Not all shown: "Showing 16 of 43 records". (offset: only in turns saved by
+					     the earlier page-by-page version, which started further down the list) -->
+					{#if found > turn.results.length && turn.results.length}
+						{#if offset}
+							{offset + 1}–{offset + turn.results.length} of {plural(found, 'record')}
+						{:else}
+							Showing {turn.results.length} of {plural(found, 'record')}
+						{/if}
 					{:else}
 						{plural(turn.results.length, 'record')} found
 					{/if}
 				</summary>
 				<div class="mt-3 grid grid-cols-1 gap-3">
+					<!-- The id uses the card's number, so the summary's [1] finds card 1 -->
 					{#each turn.results as result, i (result.id)}
-						<ResultsCard {result} number={i + 1} anchorId="t{t}-result-{i + 1}" searchMode />
+						<ResultsCard
+							{result}
+							number={offset + i + 1}
+							anchorId="t{t}-result-{offset + i + 1}"
+							searchMode
+						/>
 					{/each}
 				</div>
+				<!-- Under the cards; only the newest answer can grow (like the filters) -->
+				{#if isLatest}
+					{@const left = found - offset - turn.results.length}
+					<p role="status" class="sr-only">{moreStatus}</p>
+					{#if left > 0}
+						<div class="flex justify-center pt-2">
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={loadingMore || refining}
+								onclick={showMoreResults}
+							>
+								{loadingMore ? 'Loading…' : `Show ${Math.min(SEARCH_LIMIT, left)} more`}
+							</Button>
+						</div>
+					{/if}
+				{/if}
 			</details>
 		</article>
 	{/each}

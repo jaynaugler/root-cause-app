@@ -13,6 +13,7 @@
 	// /submit itself is protected by requireUser() in submit/+page.server.ts.
 	let links = $derived([
 		{ label: 'Home', href: '/' },
+		{ label: 'About', href: '/about' },
 		...(user ? [{ label: 'Submit request', href: '/submit' }] : [])
 	]);
 
@@ -54,7 +55,7 @@
 
 <header class="border-b border-orange-100 bg-[#FBF7F2]">
 	<nav aria-label="Main" class="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-		<a href="/" class="text-xl font-extrabold tracking-wide">OUR HISTORY HUB</a>
+		<a href="/" class="text-xl font-extrabold tracking-wide">BLACK HISTORY KNOWLEDGE HUB</a>
 
 		<!-- BIG SCREENS: links in a row -->
 		<ul class="hidden items-center gap-10 font-semibold md:flex">
