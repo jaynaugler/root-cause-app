@@ -89,8 +89,14 @@ describe('facetsRequestSchema', () => {
 describe('browseRequestSchema', () => {
 	it('reads the filters with the same rules, and allows none', () => {
 		expect(browseRequestSchema.parse({ filters: { contentcategory: ['people'], year: ['1946'] } })).toEqual(
-			{ filters: { contentcategory: ['people'] } }
+			{ filters: { contentcategory: ['people'] }, offset: 0 }
 		);
-		expect(browseRequestSchema.parse({})).toEqual({ filters: {} });
+		expect(browseRequestSchema.parse({})).toEqual({ filters: {}, offset: 0 });
+	});
+
+	it('accepts a nonnegative integer offset and rejects invalid offsets', () => {
+		expect(browseRequestSchema.parse({ offset: 24 }).offset).toBe(24);
+		expect(browseRequestSchema.safeParse({ offset: -1 }).success).toBe(false);
+		expect(browseRequestSchema.safeParse({ offset: 1.5 }).success).toBe(false);
 	});
 });

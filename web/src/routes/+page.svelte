@@ -7,10 +7,13 @@
 	import SearchBox from '#lib/components/search/SearchBox.svelte';
 	import FilterBar from '#lib/components/search/FilterBar.svelte';
 	import FacetPanel from '#lib/components/search/FacetPanel.svelte';
+	import Pagination from '#lib/components/search/Pagination.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import {
 		FACET_FIELDS,
 		MAX_HISTORY,
+		RECENT_LIMIT,
+		SEARCH_LIMIT,
 		activeFacetCount,
 		type BrowseResponse,
 		type FacetField,
@@ -137,6 +140,7 @@
 	const FILTER_DELAY = 300; // ms
 	const SUMMARY_DELAY = 1000; // ms
 	const activeFilters = $derived<Filters>(thread.at(-1)?.filters ?? {});
+	const activeOffset = $derived(thread.at(-1)?.offset ?? 0);
 	let refining = $state(false); // a filter changed; its records haven't arrived yet
 	let summaryUpdating = $state(false); // the new summary is being written
 	let refineError = $state('');
@@ -171,11 +175,13 @@
 	async function askLatest(
 		filters: Filters,
 		withSummary: boolean,
-		signal: AbortSignal
+		signal: AbortSignal,
+		offset = 0
 	): Promise<ThreadTurn | null> {
 		const body = new FormData();
 		body.set('question', thread[thread.length - 1].question);
 		body.set('history', JSON.stringify(historyBefore(thread)));
+		body.set('offset', String(offset));
 		for (const field of FACET_FIELDS) {
 			for (const value of filters[field] ?? []) body.append(field, value);
 		}
@@ -236,8 +242,8 @@
 		filterTimer = setTimeout(() => fetchRecords(id, filters), FILTER_DELAY);
 	}
 
-	async function fetchRecords(id: number, filters: Filters) {
-		const answer = await askLatest(filters, false, newSignal());
+	async function fetchRecords(id: number, filters: Filters, offset = 0, notify = true) {
+		const answer = await askLatest(filters, false, newSignal(), offset);
 		if (id !== refineId) return; // a newer change or a new search took over
 		refining = false;
 
@@ -246,21 +252,32 @@
 			refineError = 'Could not apply the filter. Try again.';
 		} else if (!answer.results.length) {
 			// Nothing matches: nothing to summarise either
-			replaceLatest({ results: [], total: 0, facets: answer.facets, summary: null, provider: null, summaryStale: false });
-			setStatus(false);
+			replaceLatest({ results: [], total: 0, offset: answer.offset, facets: answer.facets, summary: null, provider: null, summaryStale: false });
+			if (notify) setStatus(false);
 		} else {
 			// The old summary stays visible but is marked stale: its [1], [2] meant other records
-			replaceLatest({ results: answer.results, total: answer.total, facets: answer.facets, summaryStale: true });
-			scheduleSummary(id);
+			replaceLatest({ results: answer.results, total: answer.total, offset: answer.offset, facets: answer.facets, summaryStale: true });
+			scheduleSummary(id, notify);
 		}
 	}
 
+	function changeSearchPage(page: number) {
+		lastGoodFilters = activeFilters;
+		const id = cancelRefine();
+		summaryUpdating = false;
+		refineError = '';
+		refineStatus = null;
+		refining = true;
+		fetchRecords(id, activeFilters, (page - 1) * SEARCH_LIMIT, false);
+		scrollToTop(`turn-${thread.length - 1}`);
+	}
+
 	// Step 2: rewrite the summary once the clicking has stopped
-	function scheduleSummary(id: number) {
+	function scheduleSummary(id: number, notify = true) {
 		clearTimeout(summaryTimer);
 		summaryUpdating = true;
 		summaryTimer = setTimeout(async () => {
-			const answer = await askLatest(activeFilters, true, newSignal());
+			const answer = await askLatest(activeFilters, true, newSignal(), activeOffset);
 			if (id !== refineId) return;
 			summaryUpdating = false;
 			// Take the whole answer: records and summary come from the same search, so [n] match.
@@ -270,7 +287,7 @@
 					? { ...answer, summaryStale: false }
 					: { summary: null, provider: null, summaryStale: false }
 			);
-			setStatus(!!answer?.summary);
+			if (notify) setStatus(!!answer?.summary);
 		}, SUMMARY_DELAY);
 	}
 
@@ -292,6 +309,7 @@
 	let browseFilters = $state<Filters>({});
 	// The list after a filter change; null = still the one the page was loaded with (data.recent)
 	let browseResult = $state<BrowseResponse | null>(null);
+	let browseOffset = $state(0);
 	let browseLoading = $state(false);
 	let browseError = $state('');
 	let browseStatus = $state(''); // read out by screen readers once the list has changed
@@ -312,23 +330,26 @@
 		browseError = '';
 		browseStatus = '';
 		browseLoading = true;
-		browseTimer = setTimeout(() => fetchBrowse(filters), FILTER_DELAY);
+		browseTimer = setTimeout(() => fetchBrowse(filters, 0), FILTER_DELAY);
 	}
 
-	async function fetchBrowse(filters: Filters) {
+	async function fetchBrowse(filters: Filters, offset: number) {
 		const controller = new AbortController();
 		browseController = controller;
+		browseLoading = true;
+		browseError = '';
 		try {
 			const response = await fetch('/browse', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ filters }),
+				body: JSON.stringify({ filters, offset }),
 				signal: controller.signal
 			});
 			if (!response.ok) throw new Error(`status ${response.status}`);
 			const result = (await response.json()) as BrowseResponse;
 			if (controller !== browseController) return; // a newer change took over
 			browseResult = result;
+			browseOffset = offset;
 			const n = activeFacetCount(filters);
 			browseStatus = n
 				? `${plural(result.total, 'record')} match ${plural(n, 'filter')}.`
@@ -340,6 +361,11 @@
 		} finally {
 			if (controller === browseController) browseLoading = false;
 		}
+	}
+
+	function changeBrowsePage(page: number) {
+		fetchBrowse(browseFilters, (page - 1) * RECENT_LIMIT);
+		scrollToTop('recent-records');
 	}
 
 	// ---- Changes from the filter bar: to the newest answer, or (no answer yet) to the list ----
@@ -398,6 +424,7 @@
 		browseStatus = '';
 		browseFilters = {};
 		browseResult = null; // back to the list the page was loaded with
+		browseOffset = 0;
 		thread = [];
 		form = null;
 		newQuestion = '';
@@ -514,17 +541,25 @@
 
 	<!-- Browse list: the newest records (from search-api /api/browse, see +page.server.ts).
 	     Open on a fresh visit; collapses on search, then it's a toggle. -->
-	<details bind:open={recentsOpen} class="recents space-y-3">
+	<details id="recent-records" bind:open={recentsOpen} class="recents space-y-3">
 		<summary class="cursor-pointer text-sm font-medium text-muted-foreground select-none">
 			Recent records
 			{#if recent.total > recent.results.length}
 				<span class="font-normal">
-					· the newest {recent.results.length} of {recent.total}{browseFiltered ? ' matching' : ''}
+					· {recent.results.length} shown of {recent.total}{browseFiltered ? ' matching' : ''}
 				</span>
 			{:else if browseFiltered && recent.total}
 				<span class="font-normal">· {recent.total} matching</span>
 			{/if}
 		</summary>
+		<Pagination
+			page={Math.floor(browseOffset / RECENT_LIMIT) + 1}
+			total={recent.total}
+			pageSize={RECENT_LIMIT}
+			loading={browseLoading}
+			label="Recent record pages"
+			onPage={changeBrowsePage}
+		/>
 		<!-- Read out by screen readers once the list has changed after a filter change -->
 		<p role="status" class="sr-only">{browseStatus}</p>
 		<!-- While the list is being narrowed: dimmed, and marked busy for screen readers -->
@@ -538,7 +573,7 @@
 						<ResultsCard result={record} number={i + 1} anchorId={'recent-' + i} />
 					{/each}
 				</div>
-			{:else if recent.failed}
+				{:else if recent.failed}
 				<p class="text-sm text-muted-foreground">
 					Could not load the recent records. Searching may still work; try reloading the page
 					later.
@@ -587,11 +622,21 @@
 			>
 				<summary class="cursor-pointer text-sm font-medium text-muted-foreground select-none">
 					{#if found > turn.results.length}
-						The {turn.results.length} best of {plural(found, 'record')}
+						{turn.results.length} shown of {plural(found, 'record')}
 					{:else}
 						{plural(turn.results.length, 'record')} found
 					{/if}
 				</summary>
+				{#if isLatest}
+					<Pagination
+						page={Math.floor((turn.offset ?? 0) / SEARCH_LIMIT) + 1}
+						total={found}
+						pageSize={SEARCH_LIMIT}
+						loading={refining}
+						label="Search result pages"
+						onPage={changeSearchPage}
+					/>
+				{/if}
 				<div class="mt-3 grid grid-cols-1 gap-3">
 					{#each turn.results as result, i (result.id)}
 						<ResultsCard {result} number={i + 1} anchorId="t{t}-result-{i + 1}" searchMode />

@@ -45,12 +45,14 @@ export interface BrowseResponse {
 	total: number; // records passing the filters (all records without filters)
 	facets?: Facets;
 }
-export const RECENT_LIMIT = 12; // records in the "Recent records" list
+export const RECENT_LIMIT = 12; // records per page in the "Recent records" list
+export const SEARCH_LIMIT = 8; // records per page in a search answer
 
 // One question + its answer in the follow-up thread (what the action returns)
 export interface ThreadTurn extends SearchResponse {
 	question: string;
 	filters?: Filters; // the filters this answer was searched with (missing in older saved threads)
+	offset?: number; // zero-based record offset for this page
 	// true after a filter click: the records changed, the summary was written for the old ones
 	summaryStale?: boolean;
 }
