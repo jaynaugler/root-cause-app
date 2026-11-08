@@ -118,10 +118,20 @@
 	// "Selected" (Source only): the checked values when this list was loaded. A value checked
 	// or unchecked since then stays where it is until the next new list.
 	const pinned = $derived(facet.pinSelected ? loader.selected : []);
+	// "Most records" leaves out values with 0 records: they aren't "most records", and with
+	// dozens of them (sources) the list fills up with greyed-out rows. They're still in the A–Z
+	// list (disabled). Values that were checked when the list loaded stay, so they can be
+	// unchecked, and a row doesn't vanish under the cursor when it is.
+	const mostRecords = $derived(!facet.plain && !searched && sort === 'count');
+	const checkedAtLoad = $derived(new Set(loader.selected.map((option) => option.value)));
+	const leftOut = (option: FacetOption) =>
+		mostRecords && option.count === 0 && !checkedAtLoad.has(option.value);
 	const listed = $derived.by(() => {
 		const inPinned = new Set(pinned.map((option) => option.value));
-		return loader.options.filter((option) => !inPinned.has(option.value));
+		return loader.options.filter((option) => !inPinned.has(option.value) && !leftOut(option));
 	});
+	// Some values left out: offer the A–Z list even when everything would fit on one page
+	const someLeftOut = $derived(loader.options.some(leftOut));
 	const heading = $derived(
 		searched
 			? `Matching “${searched}” (${loader.totalOptions})`
@@ -197,7 +207,7 @@
 	     0 matches: disabled (a real `disabled`, not just grey), unless it's checked, so it can
 	     always be unchecked. The count is part of the name screen readers say. -->
 	<label
-		class="flex min-h-10 cursor-pointer items-center gap-3 px-4 py-2 text-sm hover:bg-panel-footer has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50"
+		class="flex min-h-10 cursor-pointer items-center gap-3 px-4 py-2 text-sm hover:bg-panel-footer has-disabled:cursor-not-allowed has-disabled:opacity-50"
 	>
 		<input
 			type="checkbox"
@@ -282,14 +292,12 @@
 			<p class="px-4 py-3 text-sm text-ink-muted">
 				{searched
 					? `No ${other}${facet.plural} match “${searched}”.`
-					: other
-						? `No other ${facet.plural}.`
-						: `No ${facet.plural} for this search.`}
+					: `No ${other}${facet.plural} with matching records.`}
 			</p>
 		{/each}
 
-		<!-- "Most records" shows only the first few: offer the rest, A–Z -->
-		{#if !facet.plain && !searched && sort === 'count' && loader.nextCursor}
+		<!-- "Most records" shows only the first few, and no empty ones: offer the rest, A–Z -->
+		{#if mostRecords && (loader.nextCursor || someLeftOut)}
 			<button
 				type="button"
 				onclick={showAll}
