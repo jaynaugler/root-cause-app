@@ -24,9 +24,9 @@ logger = logging.getLogger("uvicorn.error")
 
 MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 DOWNLOAD_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
-SUMMARY_PAGES = 3
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"
 MAX_SUMMARY_CHARS = 2000
-MAX_FULL_TEXT_CHARS = 100_000  # sanity cap when pulling a short doc's full text
+MAX_FULL_TEXT_CHARS = 100_000  # extraction safety cap; ai.py bounds the model input
 # OCR quality: images at low DPI (e.g. a full page flattened at 72 dpi, 612px)
 # read poorly — upscale to ~2400px on the long side, and drop words tesseract
 # isn't sure about (it will guess pseudo-words out of decorative textures).
@@ -85,10 +85,9 @@ def _text_layer_is_spare(document: pdfium.PdfDocument, index: int) -> bool:
 			page.close()
 
 
-def _extract_text(reader: PdfReader, full: bool, data: bytes) -> list[str]:
-	"""Text from the first few pages, using OCR for image-only pages and pages
-	with only a spare text layer (e.g. a watermark on a scan). `full`: pull every
-	page (single-page docs), not just the first few."""
+def _extract_text(reader: PdfReader, data: bytes) -> list[str]:
+	"""Extract document text up to the safety cap, using OCR for image-only pages
+	and pages with only a spare text layer (e.g. a watermark on a scan)."""
 	texts: list[str] = []
 	# Degrade gracefully to text-layer-only when tesseract isn't installed.
 	ocr_ready = shutil.which("tesseract") is not None
@@ -98,10 +97,9 @@ def _extract_text(reader: PdfReader, full: bool, data: bytes) -> list[str]:
 			document = pdfium.PdfDocument(data)
 		except pdfium.PdfiumError:
 			pass
-	cap = MAX_FULL_TEXT_CHARS if full else MAX_SUMMARY_CHARS
+	cap = MAX_FULL_TEXT_CHARS
 	try:
-		pages = reader.pages if full else reader.pages[:SUMMARY_PAGES]
-		for index, page in enumerate(pages):
+		for index, page in enumerate(reader.pages):
 			text = page.extract_text() or ""
 			if document is not None and _text_layer_is_spare(document, index):
 				text = _ocr_page(document, index) or text
@@ -203,7 +201,7 @@ async def _run_pdf_metadata(payload: PdfUrlIn) -> dict:
 	try:
 		async with httpx.AsyncClient(
 			follow_redirects=True, timeout=DOWNLOAD_TIMEOUT
-		) as client, client.stream("GET", str(payload.url)) as resp:
+		) as client, client.stream("GET", str(payload.url), headers={"user-agent": USER_AGENT}) as resp:
 			if resp.status_code != 200:
 				raise HTTPException(
 					HTTPStatus.BAD_GATEWAY, f"Download failed with HTTP status {resp.status_code}."
@@ -259,17 +257,13 @@ async def _run_pdf_metadata(payload: PdfUrlIn) -> dict:
 		except PyPdfError:
 			pass
 
-	# Single-page docs (e.g. the bccns info sheets): return their full text
-	# instead of the capped first-pages summary.
-	short_doc = page_count <= 1
-
 	record = {
 		"title": _ser(title) or None,
 		"link": str(payload.url),
 		"sitelink": None,  # the site hosting this resource — curator fills it in
 		"description": _summarize(
-			_extract_text(reader, full=short_doc, data=data),
-			MAX_FULL_TEXT_CHARS if short_doc else MAX_SUMMARY_CHARS,
+			_extract_text(reader, data=data),
+			MAX_FULL_TEXT_CHARS,
 		),
 		"summary": None,  # full cleaned summary — filled by the Gemini cleanup
 		"attribution": _ser(raw.get("/Author")) or _ser(raw.get("/Creator")) or None,

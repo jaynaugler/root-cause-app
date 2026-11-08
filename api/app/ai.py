@@ -43,8 +43,11 @@ SYSTEM_PROMPT = (
 USER_INSTRUCTIONS = f"""Clean the record below.
 
 Rules:
-- title: the SHORT main title only. From the metadata title, drop everything
-  after a colon/semicolon that is a subtitle, series note, speech transcript
+- title: the SHORT main title only. A series name, organization banner, or
+  generic document type such as 'education guide' is not a good metadata title
+  when the document itself supplies a more specific heading; use that heading.
+  From the metadata title, drop everything after a colon/semicolon that is a
+  subtitle, series note, speech transcript
   description or date qualifier — "Abolition Fanaticism in New York", not
   "Abolition Fanaticism in New York: Speech of a Runaway Slave from Baltimore,
   at an Abolition Meeting...". Keep a title's own quotation-marked or "Or,"
