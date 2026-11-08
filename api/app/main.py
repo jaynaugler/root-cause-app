@@ -8,6 +8,7 @@ from app.db import client, db
 from app.items import router as items_router
 from app.pdf import router as pdf_router
 from app.bad_links import router as bad_links_router
+from app.moderate import router as moderate_router
 
 
 @asynccontextmanager
@@ -33,6 +34,7 @@ if origins := get_allowed_origins():
 app.include_router(items_router, prefix="/api")
 app.include_router(pdf_router, prefix="/api")
 app.include_router(bad_links_router, prefix="/api")
+app.include_router(moderate_router, prefix="/api")
 
 
 @app.get("/health")
