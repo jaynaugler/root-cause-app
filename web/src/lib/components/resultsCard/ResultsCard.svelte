@@ -5,6 +5,12 @@
     import Button from '../ui/button/button.svelte';
     import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
     import GreenPattern from '#lib/assets/GreenPattern.jpg';
+    // Icons for different link types
+    import Youtube from '@lucide/svelte/icons/video';
+    import FileText from '@lucide/svelte/icons/file-text';
+    import Headphones from '@lucide/svelte/icons/headphones';
+    import BookOpen from '@lucide/svelte/icons/book-open';
+    import LinkIcon from '@lucide/svelte/icons/link';
 
     let {
         result,
@@ -20,6 +26,44 @@
 
     // Prefer the human-readable hosting page; fall back to the resource itself.
     let href = $derived(result.sitelink || result.link);
+
+    type LinkType = 'youtube' | 'pdf' | 'podcast' | 'book' | 'uncategorized';
+
+    function classifyLink(result: SearchResult, href: string | undefined): LinkType {
+        if (!href) return 'uncategorized';
+
+        let url: URL | undefined;
+
+        try {
+            url = new URL(href);
+        } catch {
+            // The link may not be an absolute URL.
+        }
+
+        const hostname = url?.hostname.toLowerCase() ?? '';
+        const pathname = (url?.pathname ?? href.split(/[?#]/)[0]).toLowerCase();
+        const format = (result.resourceformat ?? '').toLowerCase();
+
+        if (hostname === 'youtu.be' || hostname.endsWith('.youtube.com') || hostname === 'youtube.com') {
+            return 'youtube';
+        }
+
+        if (pathname.endsWith('.pdf')) {
+            return 'pdf';
+        }
+
+        if (format.includes('podcast') || format.includes('audio')) {
+            return 'podcast';
+        }
+
+        if (format.includes('book') || format.includes('monograph')) {
+            return 'book';
+        }
+
+        return 'uncategorized';
+    }
+
+    let linkType = $derived(classifyLink(result, href));
 </script>
 
 <Card.Root id={anchorId} class="mx-auto w-full aspect-[1.1/1] bg-card-bg scroll-mt-6">
@@ -59,18 +103,35 @@
 
         {#if href}
             <Button
-                class="mt-auto self-end inline-flex h-12 w-40 items-center justify-between overflow-hidden bg-card-btn p-0 text-white hover:bg-card-btn-hover"
+                class="relative mt-auto self-end inline-flex h-10 w-38 overflow-hidden bg-card-btn p-0 text-white hover:bg-card-btn-hover"
                 href={href}
                 target="_blank"
                 rel="noopener noreferrer"
             >
                 <img
                     src={GreenPattern}
-                    alt="Pattern on button"
-                    class="size-12 shrink-0 rounded-l-md object-cover"
+                    alt=""
+                    class="absolute left-0 top-0 size-10 shrink-0 rounded-l-md object-cover"
                 />
-                <span class="px-3">Go!</span>
-                <ArrowRightIcon class="mx-3 size-5 shrink-0" aria-hidden="true" />
+
+                <span class="absolute inset-y-0 left-10 right-0 flex items-center justify-center gap-2 whitespace-nowrap">
+                    {#if linkType === 'youtube'}
+                        <Youtube class="size-5 shrink-0" aria-hidden="true" />
+                        Video
+                    {:else if linkType === 'pdf'}
+                        <FileText class="size-5 shrink-0" aria-hidden="true" />
+                        PDF
+                    {:else if linkType === 'podcast'}
+                        <Headphones class="size-5 shrink-0" aria-hidden="true" />
+                        Podcast
+                    {:else if linkType === 'book'}
+                        <BookOpen class="size-5 shrink-0" aria-hidden="true" />
+                        Book
+                    {:else}
+                        <LinkIcon class="size-5 shrink-0" aria-hidden="true" />
+                        Link
+                    {/if}
+                </span>
             </Button>
         {/if} 
     </Card.Content>
