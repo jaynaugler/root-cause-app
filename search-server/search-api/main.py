@@ -2,7 +2,7 @@ import logging
 import os
 import re
 import secrets
-from typing import Literal
+from typing import Annotated, Literal, get_args
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException
@@ -19,6 +19,10 @@ SCORE_THRESHOLD = float(os.environ.get("SCORE_THRESHOLD", "0.7"))
 # Used only when SCORE_THRESHOLD finds nothing (e.g. questions in other words or in French,
 # which score lower). Set it equal to SCORE_THRESHOLD to turn the second try off.
 FALLBACK_THRESHOLD = float(os.environ.get("FALLBACK_THRESHOLD", "0.6"))
+# Fields the search page can filter by (the checkboxes). Must match the
+# filterableAttributes set in Meilisearch, see docs/setup.md.
+FacetField = Literal["contentcategory", "attribution", "resourceformat"]
+FACET_FIELDS = list(get_args(FacetField))
 
 # Summary settings
 SUMMARY_PROVIDER = os.environ.get("SUMMARY_PROVIDER", "ollama")
@@ -63,6 +67,30 @@ class SearchRequest(BaseModel):
     limit: int = Field(default=8, ge=1, le=20)
     provider: Literal["ollama", "gemini"] | None = None
     history: list[Turn] = Field(default_factory=list, max_length=3)  # oldest first
+    # {"contentcategory": ["people", "events"]}: only known fields, at most 20 short values each
+    filters: dict[
+        FacetField,
+        Annotated[list[Annotated[str, Field(min_length=1, max_length=200)]], Field(max_length=20)],
+    ] = Field(default_factory=dict)
+
+
+def quote(value):
+    """Put a value in double quotes for a Meilisearch filter, escaping \\ and " inside it,
+    so a value can never end the quotes early and change the filter."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def build_filter(filters):
+    """{"contentcategory": ["people", "events"], "attribution": ["BCCNS"]}
+    → 'contentcategory IN ["people", "events"] AND attribution IN ["BCCNS"]'
+    OR between values of one field, AND between fields. None = no filter."""
+    parts = [
+        f"{field} IN [{', '.join(quote(v) for v in values)}]"
+        for field, values in filters.items()
+        if values
+    ]
+    return " AND ".join(parts) or None
 
 
 def search_text(question, history):
@@ -169,15 +197,19 @@ def health():
 
 
 async def meili_search(client, body, threshold):
-    """One Meilisearch search, keeping only hits that score at least `threshold`."""
+    """One Meilisearch search, keeping only hits that score at least `threshold`.
+    Returns Meilisearch's whole answer: "hits" and the facet counts ("facetDistribution")."""
     r = await client.post(
         f"{MEILI_URL}/indexes/records/search",
         json={**body, "rankingScoreThreshold": threshold},
         headers={"Authorization": f"Bearer {MEILI_SEARCH_KEY}"},
     )
     if r.status_code != 200:
+        # Log Meilisearch's own message (e.g. "attribute X is not filterable"); the caller
+        # only gets a generic error.
+        logger.warning("Meilisearch error %s: %s", r.status_code, r.text[:500])
         raise HTTPException(status_code=502, detail="Search engine error")
-    return r.json()["hits"]
+    return r.json()
 
 
 @app.post("/api/search")
@@ -193,14 +225,20 @@ async def search(req: SearchRequest, x_api_key: str = Header(default="")):
         "hybrid": {"embedder": "default", "semanticRatio": SEMANTIC_RATIO},
         "limit": req.limit,
         "showRankingScore": True,
+        "facets": FACET_FIELDS,  # ask Meilisearch to count the values of these fields
     }
+    if search_filter := build_filter(req.filters):
+        body["filter"] = search_filter
     async with httpx.AsyncClient(timeout=10) as client:
-        hits = await meili_search(client, body, SCORE_THRESHOLD)
-        if not hits and FALLBACK_THRESHOLD < SCORE_THRESHOLD:
-            hits = await meili_search(client, body, FALLBACK_THRESHOLD)
+        result = await meili_search(client, body, SCORE_THRESHOLD)
+        if not result["hits"] and FALLBACK_THRESHOLD < SCORE_THRESHOLD:
+            result = await meili_search(client, body, FALLBACK_THRESHOLD)
+    # Hits and counts always come from the same search, so they agree
+    hits = result["hits"]
+    facets = result.get("facetDistribution", {})
 
-    # 3. Summary: the request's choice, or the default
+    # 3. Summary: the request's choice, or the default (uses the filtered hits)
     provider = req.provider or SUMMARY_PROVIDER
     summary, used = await summarize(req.question, hits, provider, req.history)
 
-    return {"summary": summary, "provider": used, "results": hits}
+    return {"summary": summary, "provider": used, "results": hits, "facets": facets}
