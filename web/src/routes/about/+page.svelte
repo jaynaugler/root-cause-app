@@ -2,8 +2,8 @@
 	import * as Card from '#lib/components/ui/card/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import pattern from '#lib/assets/backgroundPattern.webp';
-	import searchShot from '#lib/assets/about_search.png';
 	import centrePhoto from '#lib/assets/about_center_web.jpg';
+	import ideaPhoto from '#lib/assets/ricardo-idea-upsplash.jpg';
 </script>
 
 <svelte:head>
@@ -43,14 +43,27 @@
 				</p>
 			</div>
 
-			<!-- The hub at work: a search screenshot (about_search) -->
-			<figure class="overflow-hidden rounded-2xl border border-[#D2CBBD] bg-white shadow-sm">
+			<!-- A photo for finding what you're looking for (about_idea, Unsplash) -->
+			<figure class="overflow-hidden rounded-2xl border border-[#D2CBBD] shadow-sm">
 				<img
-					src={searchShot}
-					alt="The search page: someone asks “Tell me about Viola Desmond”, and the hub answers with a short summary drawn from the records"
+					src={ideaPhoto}
+					alt="Hands cupped around a glowing light bulb, like an idea being kept safe"
 					class="aspect-[4/3] w-full object-cover"
 					loading="lazy"
 				/>
+				<figcaption class="bg-white px-4 py-2 text-xs text-[#6B6458]">
+					Photo by <a
+						href="https://unsplash.com/@pavement_special?utm_source=unsplash&utm_medium=referral&utm_content=creditCopyText"
+						class="underline hover:text-[#9A3412]"
+						rel="noopener noreferrer"
+						target="_blank">Riccardo Annandale</a
+					> on <a
+						href="https://unsplash.com/photos/man-holding-incandescent-bulb-7e2pe9wjL9M?utm_source=unsplash&utm_medium=referral&utm_content=creditCopyText"
+						class="underline hover:text-[#9A3412]"
+						rel="noopener noreferrer"
+						target="_blank">Unsplash</a
+					>
+				</figcaption>
 			</figure>
 		</div>
 	</section>
@@ -103,6 +116,9 @@
 					class="h-auto w-full"
 					loading="lazy"
 				/>
+				<figcaption class="bg-white px-4 py-2 text-xs text-[#6B6458]">
+					Photo courtesy of the Black Cultural Centre for Nova Scotia
+				</figcaption>
 			</figure>
 
 			<div class="space-y-4">
