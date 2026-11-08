@@ -13,7 +13,7 @@
 </script>
 
 <svelte:head>
-	<title>Organisation login · Our History Hub</title>
+	<title>Organisation login · Black History Knowledge Hub</title>
 </svelte:head>
 
 <main>
