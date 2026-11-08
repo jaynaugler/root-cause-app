@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Titan+One&display=swap');
 @import 'tailwindcss';
 @import "tw-animate-css";
 @import "shadcn-svelte/tailwind.css";
@@ -158,3 +159,9 @@
 		@apply font-sans;
 	}
 }
+
+@theme {
+	--font-heading: 'Titan One', sans-serif;
+}
+
+@import url('https://fonts.googleapis.com/css2?family=Titan+One&display=swap');
