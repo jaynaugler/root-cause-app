@@ -1,7 +1,12 @@
+import asyncio
+import base64
+import binascii
+import json
 import logging
 import os
 import re
 import secrets
+import unicodedata
 from typing import Annotated, Literal, get_args
 
 import httpx
@@ -66,19 +71,42 @@ class Turn(BaseModel):
     summary: str | None = Field(default=None, max_length=MAX_SUMMARY_CHARS)
 
 
+# Checked filter values, e.g. {"contentcategory": ["people", "events"]}: only known fields,
+# at most 20 values each, 1-200 characters
+Filters = dict[
+    FacetField,
+    Annotated[list[Annotated[str, Field(min_length=1, max_length=200)]], Field(max_length=20)],
+]
+
+
 class SearchRequest(BaseModel):
     question: str = Field(min_length=1, max_length=500)
     limit: int = Field(default=8, ge=1, le=20)
     provider: Literal["ollama", "gemini"] | None = None
     history: list[Turn] = Field(default_factory=list, max_length=3)  # oldest first
-    # {"contentcategory": ["people", "events"]}: only known fields, at most 20 short values each
-    filters: dict[
-        FacetField,
-        Annotated[list[Annotated[str, Field(min_length=1, max_length=200)]], Field(max_length=20)],
-    ] = Field(default_factory=dict)
+    filters: Filters = Field(default_factory=dict)
     # false = skip the AI: records and counts come back in milliseconds. The web app uses
     # this when a filter is clicked, then asks again with a summary once the clicking stops.
     summary: bool = True
+
+
+class BrowseRequest(BaseModel):
+    """Browsing without a question: the newest records, filtered, with counts."""
+    limit: int = Field(default=12, ge=1, le=50)
+    filters: Filters = Field(default_factory=dict)
+
+
+class FacetsRequest(BaseModel):
+    """One filter panel: the values of one field, with counts, for the same question and
+    filters as the records on the page (same rules as SearchRequest)."""
+    question: str = Field(min_length=1, max_length=500)
+    history: list[Turn] = Field(default_factory=list, max_length=3)
+    filters: Filters = Field(default_factory=dict)
+    facet: FacetField  # the field whose values the panel lists
+    search: str = Field(default="", max_length=100)  # text typed in the panel's search field
+    sort: Literal["count", "alpha"] = "count"  # most records first, or A–Z
+    limit: int = Field(default=8, ge=1, le=100)  # values per page
+    cursor: str | None = Field(default=None, max_length=200)  # next_cursor of the previous page
 
 
 def quote(value):
@@ -106,32 +134,44 @@ def with_filter(query, filters):
     return {**query, "filter": search_filter} if search_filter else dict(query)
 
 
+def count_body(body):
+    """A count search for `body`: ranks up to COUNT_LIMIT records (see there). Only the counts
+    are used, so it returns just the id of each ranked record, to keep the answer small.
+    (Not limit 0: that makes Meilisearch skip the meaning half of a hybrid search.)"""
+    return {**body, "limit": COUNT_LIMIT, "attributesToRetrieve": ["id"], "showRankingScore": False}
+
+
+def without_own_filter(filters, field):
+    """Every filter except `field`'s own: its values are alternatives (OR), so they mustn't
+    hide each other in the counts."""
+    return {f: v for f, v in filters.items() if f != field}
+
+
 def build_searches(body, filters):
     """The main search (the records shown), plus the searches that count the filter values.
 
     Counts never come from the main search: it ranks only `limit` (e.g. 8) records, and
     Meilisearch would then count weak matches below the threshold too (see COUNT_LIMIT).
-    - one count search for all fields WITHOUT checked values, with all filters
+    - one count search with ALL filters. It counts the fields WITHOUT checked values, and its
+      hits are the total number of matching records (see total()). It is always there, even
+      when every field has checked values (then it counts no field, only the total).
     - one count search per field WITH checked values, with every filter EXCEPT its own: with
       "people" checked, the category counts still show "history (7)". The values of one field
       are alternatives (OR), so checking one mustn't hide the others. Other fields still apply.
-    Returns (searches, counted): searches[0] is the main one; searches[i + 1] counts the
-    fields in counted[i].
+    Returns (searches, counted): searches[0] is the main one, searches[1] the one with all
+    filters; searches[i + 1] counts the fields in counted[i] (counted[0] can be empty).
     """
     checked = [field for field, values in filters.items() if values]
     unchecked = [field for field in FACET_FIELDS if field not in checked]
-    # Only the counts are used: return just the id of each ranked record, to keep it small.
-    # (Not limit 0: that makes Meilisearch skip the meaning half of a hybrid search.)
-    count = {**body, "limit": COUNT_LIMIT, "attributesToRetrieve": ["id"], "showRankingScore": False}
+    count = count_body(body)
 
-    searches = [with_filter(body, filters)]
-    counted = []
-    if unchecked:
-        searches.append(with_filter({**count, "facets": unchecked}, filters))
-        counted.append(unchecked)
+    searches = [
+        with_filter(body, filters),
+        with_filter({**count, "facets": unchecked} if unchecked else count, filters),
+    ]
+    counted = [unchecked]
     for field in checked:
-        other_filters = {f: v for f, v in filters.items() if f != field}
-        searches.append(with_filter({**count, "facets": [field]}, other_filters))
+        searches.append(with_filter({**count, "facets": [field]}, without_own_filter(filters, field)))
         counted.append([field])
     return searches, counted
 
@@ -239,12 +279,29 @@ def health():
     return {"status": "ok"}
 
 
-async def meili_search(client, searches, threshold):
+def check_api_key(x_api_key):
+    # compare_digest instead of ==: takes the same time however many characters match
+    if not secrets.compare_digest(x_api_key, API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+def collect_facets(counted, count_results):
+    """The counts from the count searches of build_searches(), as {field: {value: count}}."""
+    facets = {}
+    for fields, result in zip(counted, count_results):
+        distribution = result.get("facetDistribution", {})
+        for field in fields:
+            facets[field] = distribution.get(field, {})
+    return facets
+
+
+async def meili_search(client, searches, threshold=None):
     """Run several searches in ONE request (Meilisearch /multi-search), all keeping only hits
-    that score at least `threshold`. Returns Meilisearch's answer for each search, in the
-    same order: "hits" and the facet counts ("facetDistribution")."""
+    that score at least `threshold` (None = no threshold, e.g. browsing). Returns Meilisearch's
+    answer for each search, in the same order: "hits" and the counts ("facetDistribution")."""
     queries = [
-        {**search, "indexUid": "records", "rankingScoreThreshold": threshold}
+        {**search, "indexUid": "records"}
+        | ({"rankingScoreThreshold": threshold} if threshold is not None else {})
         for search in searches
     ]
     r = await client.post(
@@ -260,15 +317,71 @@ async def meili_search(client, searches, threshold):
     return r.json()["results"]
 
 
+async def run_with_fallback(client, searches):
+    """meili_search() with the strict SCORE_THRESHOLD first. If the main search (searches[0])
+    finds nothing, EVERY search runs once more with FALLBACK_THRESHOLD, so the hits, the counts
+    and the total always use the same threshold. /api/search and /api/facets both use this, so
+    the counts in a filter panel always agree with the records on the page."""
+    results = await meili_search(client, searches, SCORE_THRESHOLD)
+    if not results[0]["hits"] and FALLBACK_THRESHOLD < SCORE_THRESHOLD:
+        results = await meili_search(client, searches, FALLBACK_THRESHOLD)
+    return results
+
+
+def total(results):
+    """How many records match the question and all filters: the hits of the count search with
+    all filters (searches[1] of build_searches()). It ranks up to COUNT_LIMIT records, so the
+    number is exact below 1000 and stops at 1000. Not estimatedTotalHits: like the counts, that
+    would include weak matches below the threshold."""
+    return len(results[1]["hits"])
+
+
+def fold(text):
+    """Text for matching, without case and accents: "Université" → "universite".
+    NFKD splits "é" into "e" + an accent mark; the marks are then dropped."""
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
+
+
+def sort_options(options, sort, selected):
+    """Panel order. "count": most records first, ties A–Z. "alpha": A–Z.
+    Either way, values with 0 records go last (the panel shows them disabled), except checked
+    ones: a checked value must stay reachable so it can be unchecked."""
+    def last(option):
+        return option["count"] == 0 and option["value"] not in selected
+
+    if sort == "alpha":
+        return sorted(options, key=lambda o: (last(o), fold(o["value"])))
+    return sorted(options, key=lambda o: (last(o), -o["count"], fold(o["value"])))
+
+
+# Paging. The cursor is the position of the next page, packed as base64 JSON ({"o": 8}).
+# The caller only sends back what it got, it never computes one, so the format can change
+# later (e.g. to the last value seen) without changing the web app.
+def encode_cursor(offset):
+    return base64.urlsafe_b64encode(json.dumps({"o": offset}).encode()).decode()
+
+
+def decode_cursor(cursor):
+    if not cursor:
+        return 0
+    try:
+        offset = json.loads(base64.urlsafe_b64decode(cursor))["o"]
+    except (binascii.Error, ValueError, KeyError, TypeError):
+        offset = None
+    if not isinstance(offset, int) or offset < 0:
+        raise HTTPException(status_code=422, detail="Invalid cursor")
+    return offset
+
+
 @app.post("/api/search")
 async def search(req: SearchRequest, x_api_key: str = Header(default="")):
     # 1. Check the API key
-    if not secrets.compare_digest(x_api_key, API_KEY):
-        raise HTTPException(status_code=401, detail="Invalid API key")
+    check_api_key(x_api_key)
 
     # 2. Search Meilisearch (earlier questions help with "she", "it", etc.)
-    #    Strict threshold first; if that finds nothing, one more try with the looser one.
-    #    Filters and counts: see build_searches().
+    #    Strict threshold first; if that finds nothing, one more try with the looser one
+    #    (run_with_fallback). Filters, counts and total: see build_searches().
     body = {
         "q": search_text(req.question, req.history),
         "hybrid": {"embedder": "default", "semanticRatio": SEMANTIC_RATIO},
@@ -277,17 +390,9 @@ async def search(req: SearchRequest, x_api_key: str = Header(default="")):
     }
     searches, counted = build_searches(body, req.filters)
     async with httpx.AsyncClient(timeout=10) as client:
-        results = await meili_search(client, searches, SCORE_THRESHOLD)
-        if not results[0]["hits"] and FALLBACK_THRESHOLD < SCORE_THRESHOLD:
-            # The count searches are re-run too: hits and counts use the same threshold
-            results = await meili_search(client, searches, FALLBACK_THRESHOLD)
+        results = await run_with_fallback(client, searches)
     hits = results[0]["hits"]
-    # Collect the counts from the count searches (see build_searches)
-    facets = {}
-    for fields, result in zip(counted, results[1:]):
-        distribution = result.get("facetDistribution", {})
-        for field in fields:
-            facets[field] = distribution.get(field, {})
+    facets = collect_facets(counted, results[1:])
 
     # 3. Summary: the request's choice, or the default (uses the filtered hits).
     #    Skipped when the caller only wants records and counts.
@@ -296,4 +401,89 @@ async def search(req: SearchRequest, x_api_key: str = Header(default="")):
         provider = req.provider or SUMMARY_PROVIDER
         summary, used = await summarize(req.question, hits, provider, req.history)
 
-    return {"summary": summary, "provider": used, "results": hits, "facets": facets}
+    return {
+        "summary": summary,
+        "provider": used,
+        "results": hits,
+        "total": total(results),
+        "facets": facets,
+    }
+
+
+@app.post("/api/browse")
+async def browse(req: BrowseRequest, x_api_key: str = Header(default="")):
+    """The newest records, filtered by the checked pills, plus the counts for the pills.
+    No question, so no AI and no score threshold: Meilisearch's "placeholder search" (q = "")
+    simply returns all records that pass the filters, here sorted newest first."""
+    check_api_key(x_api_key)
+
+    body = {"q": "", "sort": ["createdAtTs:desc"], "limit": req.limit}
+    # Same counting as in search(): each field is counted without its own filter
+    searches, counted = build_searches(body, req.filters)
+    async with httpx.AsyncClient(timeout=10) as client:
+        results = await meili_search(client, searches)
+
+    return {
+        "results": results[0]["hits"],
+        "total": total(results),
+        "facets": collect_facets(counted, results[1:]),
+    }
+
+
+@app.post("/api/facets")
+async def facet_options(req: FacetsRequest, x_api_key: str = Header(default="")):
+    """The values of ONE field for a filter panel, with counts, filtered by the text typed in
+    the panel, sorted and paged. The counts are the same as in /api/search for the same
+    question and filters: the field is counted without its own filter, with the same threshold."""
+    check_api_key(x_api_key)
+
+    # 1. The same main search as /api/search, but limit 1: it only decides which threshold
+    #    applies (run_with_fallback), so the counts agree with the records on the page.
+    body = {
+        "q": search_text(req.question, req.history),
+        "hybrid": {"embedder": "default", "semanticRatio": SEMANTIC_RATIO},
+        "limit": 1,
+        "attributesToRetrieve": ["id"],
+    }
+    searches = [
+        with_filter(body, req.filters),
+        # 2. The counts: this field without its own filter, like in build_searches()
+        with_filter(
+            {**count_body(body), "facets": [req.facet]},
+            without_own_filter(req.filters, req.facet),
+        ),
+    ]
+    # 3. Every value the field has in the whole archive, so values with 0 matches can still be
+    #    listed (disabled). A placeholder search (no question): no threshold, so it runs as a
+    #    separate request, at the same time as the others.
+    every_value = {"q": "", "limit": 0, "facets": [req.facet]}
+    async with httpx.AsyncClient(timeout=10) as client:
+        results, archive = await asyncio.gather(
+            run_with_fallback(client, searches),
+            meili_search(client, [every_value]),
+        )
+    counts = results[1].get("facetDistribution", {}).get(req.facet, {})
+    in_archive = archive[0].get("facetDistribution", {}).get(req.facet, {})
+
+    # 4. Checked values always count as values, even if they no longer exist: they must stay
+    #    visible so they can be unchecked.
+    selected = req.filters.get(req.facet, [])
+    values = {**dict.fromkeys(in_archive), **dict.fromkeys(counts), **dict.fromkeys(selected)}
+    options = [{"value": value, "count": counts.get(value, 0)} for value in values]
+
+    # 5. The panel's search text: case and accents don't matter ("univ" finds "Université")
+    needle = fold(req.search.strip())
+    if needle:
+        options = [option for option in options if needle in fold(option["value"])]
+    options = sort_options(options, req.sort, selected)
+
+    # 6. One page
+    start = decode_cursor(req.cursor)
+    end = start + req.limit
+    return {
+        "options": options[start:end],
+        # The checked values, whatever was typed: the panel pins them on top
+        "selected": [{"value": value, "count": counts.get(value, 0)} for value in selected],
+        "total_options": len(options),  # how many values match the search text, on all pages
+        "next_cursor": encode_cursor(end) if end < len(options) else None,
+    }

@@ -135,8 +135,14 @@ Run these from `search-server/`.
 
 ## Connecting the web app
 
-The web app calls the search from the **server side** of `web/src/routes/search/+page.server.ts`,
-so the key never reaches the browser. Set these in the **repo-root** `.env` (and in Vercel for production):
+The web app calls search-api only from its **server side**, so the key never reaches the browser:
+
+- `web/src/routes/+page.server.ts`: the search action (`/api/search`) of the search page, which is
+  the home page `/`
+- `web/src/routes/facets/[facet]/+server.ts`: the filter panels (`/api/facets`). Not under `/api`,
+  because that path belongs to the Python `api/` service.
+
+Both check the input with the rules in `web/src/lib/server/search-params.ts` first. Set these in the **repo-root** `.env` (and in Vercel for production):
 
 ```
 SEARCH_API_URL="https://<search-hostname>"   # without /api/search
@@ -145,11 +151,14 @@ SEARCH_API_KEY="<same value as API_KEY in search-server/.env>"
 
 **Limits that must match on both sides.** If you change one, change the other:
 
-| Limit                          | search-api (`main.py`)                  | web (`web/src/lib/search.ts`, `+page.server.ts`) |
+| Limit                          | search-api (`main.py`)                  | web (`web/src/lib/search.ts`, `web/src/lib/server/search-params.ts`) |
 | ------------------------------ | --------------------------------------- | ------------------------------------------------ |
-| question length                | `max_length=500`                        | `.max(500)`                                       |
+| question length                | `max_length=500`                        | `MAX_QUESTION_CHARS = 500`                        |
 | earlier turns sent as history  | `history: max_length=3`                 | `MAX_HISTORY = 3`                                 |
 | answer length                  | `MAX_SUMMARY_CHARS = 2000`              | `MAX_SUMMARY_CHARS = 2000`                        |
+| filter fields                  | `FacetField`                            | `FACET_FIELDS`                                    |
+| checked values per field       | `Filters`: max 20, each 1–200 chars     | `filterValuesSchema`: `.max(20)`, `.min(1).max(200)` |
+| panel search text / page size  | `FacetsRequest`: `search` ≤ 100, `limit` 1–100 | `facetsRequestSchema`: same                |
 
 ## Troubleshooting
 
@@ -161,5 +170,6 @@ SEARCH_API_KEY="<same value as API_KEY in search-server/.env>"
 | results but `summary: null`               | Both AI providers failed. `docker compose logs search-api` shows why (often an Ollama timeout or a missing model) |
 | no results for anything                   | The index is empty. Check `docker compose logs sync`                                             |
 | tunnel URL gives a Cloudflare error page  | `cloudflared` is down or `TUNNEL_TOKEN` is wrong. Check `docker compose logs cloudflared`        |
+| Cloudflare `502 Bad gateway`, "Host: Error" | The tunnel works, but search-api isn't answering: it crashed or keeps restarting. `docker compose ps`, then `docker compose logs --tail 50 search-api`. A `ModuleNotFoundError` right after a deploy usually means the wrong file was copied to `search-api/main.py` (compare `sha256sum` with your local copy) |
 | Meilisearch won't start after an update   | The images use `:latest`, and a new Meilisearch version may not read old data. Pin the previous version in `docker-compose.yml`, or re-create the index |
 | sync logs `ServerSelectionTimeoutError`   | Atlas refuses the connection. Add the server's public IP to Atlas → Network Access               |

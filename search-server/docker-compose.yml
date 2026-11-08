@@ -49,7 +49,7 @@ services:
       - ATLAS_COLLECTION=${ATLAS_COLLECTION}
       - MEILI_URL=http://meilisearch:7700
       - MEILI_SYNC_KEY=${MEILI_SYNC_KEY}
-      - APPROVED_ONLY=false
+      - APPROVED_ONLY=true
     depends_on:
       - meilisearch
     restart: unless-stopped
