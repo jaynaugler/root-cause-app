@@ -12,6 +12,7 @@ from app.items import router as items_router
 from app.moderate import router as moderate_router
 from app.pdf import router as pdf_router
 from app.video import router as video_router
+from app.health import router as health_router
 
 
 @asynccontextmanager
@@ -41,6 +42,7 @@ app.include_router(video_router, prefix="/api")
 app.include_router(feeds_router, prefix="/api")
 app.include_router(bad_links_router, prefix="/api")
 app.include_router(moderate_router, prefix="/api")
+app.include_router(health_router, prefix="/api")
 
 
 @app.get("/health")
