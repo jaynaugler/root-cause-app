@@ -2,6 +2,7 @@
 // prove the protected routes call it. If someone deletes that one line, these fail.
 import { isHttpError, isRedirect } from '@sveltejs/kit';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { load as homeLoad } from '../routes/+page.server.js';
 import { load as submitLoad } from '../routes/submit/+page.server.js';
 import { load as submittedRequestsLoad } from '../routes/admin/submitted-requests/+page.server.js';
 import { POST as saveResource } from '../routes/resources/+server.js';
@@ -109,5 +110,46 @@ describe('POST /resources', () => {
 		expect(saved?.description).toBe('Generated resource description');
 		expect(saved?.submittedDescription).toBe('Context for the review team');
 		expect(saved?.submittedSummary).toBe('S'.repeat(250));
+	});
+});
+
+describe('MongoDB card wall', () => {
+	beforeEach(async () => {
+		const Resource = await getResourceModel();
+		await Resource.deleteMany({});
+		await Resource.insertMany(
+			Array.from({ length: 13 }, (_, i) => ({
+				title: `Record ${i}`,
+				link: `https://example.com/${i}`,
+				resourceformat: i < 3 ? 'article' : 'pdf',
+				contentcategory: i < 3 ? 'history' : 'people',
+				attribution: i < 3 ? 'Archive' : 'Other',
+				status: 'approved',
+				createdAt: new Date(2026, 0, i + 1)
+			}))
+		);
+	});
+
+	async function loadWall(query = '') {
+		const result = await homeLoad({ url: new URL(`http://localhost/${query}`) } as AnyEvent);
+		if (!result) throw new Error('Expected card wall data');
+		return result;
+	}
+
+	it('paginates the newest records through MongoDB', async () => {
+		const first = await loadWall();
+		expect(first.wall).toMatchObject({ total: 13, page: 1, pageCount: 2 });
+		expect(first.defaultRecords).toHaveLength(12);
+		expect(first.defaultRecords[0].title).toBe('Record 12');
+
+		const second = await loadWall('?page=2');
+		expect(second.defaultRecords).toHaveLength(1);
+		expect(second.defaultRecords[0].title).toBe('Record 0');
+	});
+
+	it('combines MongoDB filters and title sorting', async () => {
+		const result = await loadWall('?resourceformat=article&contentcategory=history&attribution=Archive&sort=title');
+		expect(result.wall.total).toBe(3);
+		expect(result.defaultRecords.map((record: { title?: string }) => record.title)).toEqual(['Record 0', 'Record 1', 'Record 2']);
 	});
 });

@@ -92,14 +92,54 @@ export const actions: Actions = {
 
 import { getResourceModel } from '#lib/server/resources.js';
 
-// Landing state: recent approved records so the page has content before the
-// first search. A database failure must not take the whole page down — an
-// empty list just means the browse section falls back to the "no records" note.
-export const load: PageServerLoad = async () => {
+const WALL_PAGE_SIZE = 12;
+const wallSortSchema = z.enum(['newest', 'oldest', 'title']);
+
+function wallFilter(url: URL, key: string): string {
+	const value = url.searchParams.get(key)?.trim() ?? '';
+	return value.length <= 200 ? value : '';
+}
+
+// MongoDB-backed card wall. Search actions never use these filters or sorting.
+export const load: PageServerLoad = async ({ url }) => {
+	const filters = {
+		resourceformat: wallFilter(url, 'resourceformat'),
+		contentcategory: wallFilter(url, 'contentcategory'),
+		attribution: wallFilter(url, 'attribution')
+	};
+	const parsedSort = wallSortSchema.safeParse(url.searchParams.get('sort'));
+	const sort = parsedSort.success ? parsedSort.data : 'newest';
+	const requestedPage = Number.parseInt(url.searchParams.get('page') ?? '1', 10);
+	let page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+	const emptyWall = {
+		page: 1,
+		pageCount: 1,
+		total: 0,
+		sort,
+		filters,
+		options: { resourceformat: [], contentcategory: [], attribution: [] }
+	};
+
 	try {
 		const Resource = await getResourceModel();
+		const query: Record<string, unknown> = { status: 'approved' };
+		if (filters.resourceformat) query.resourceformat = filters.resourceformat;
+		if (filters.contentcategory) {
+			query.contentcategory = filters.contentcategory === 'uncategorized' ? null : filters.contentcategory;
+		}
+		if (filters.attribution) query.attribution = filters.attribution;
+
+		const [total, resourceformat, contentcategory, attribution] = await Promise.all([
+			Resource.countDocuments(query),
+			Resource.distinct('resourceformat', { status: 'approved' }),
+			Resource.distinct('contentcategory', { status: 'approved' }),
+			Resource.distinct('attribution', { status: 'approved' })
+		]);
+		const pageCount = Math.max(1, Math.ceil(total / WALL_PAGE_SIZE));
+		page = Math.min(page, pageCount);
+		const order: Record<string, 1 | -1> = sort === 'oldest' ? { createdAt: 1, _id: 1 } : sort === 'title' ? { title: 1, _id: 1 } : { createdAt: -1, _id: -1 };
 		const docs = await Resource.find(
-			{ status: 'approved' },
+			query,
 			{
 				title: 1,
 				description: 1,
@@ -112,9 +152,11 @@ export const load: PageServerLoad = async () => {
 				createdAt: 1
 			}
 		)
-			.sort({ createdAt: -1 })
-			.limit(12)
+			.sort(order)
+			.skip((page - 1) * WALL_PAGE_SIZE)
+			.limit(WALL_PAGE_SIZE)
 			.lean();
+
 		return {
 			defaultRecords: docs.map((doc) => ({
 				id: String(doc._id),
@@ -127,10 +169,22 @@ export const load: PageServerLoad = async () => {
 				resourceformat: doc.resourceformat,
 				contentcategory: doc.contentcategory ?? undefined,
 				createdAt: doc.createdAt.toISOString()
-			}))
+			})),
+			wall: {
+				page,
+				pageCount,
+				total,
+				sort,
+				filters,
+				options: {
+					resourceformat: resourceformat.filter(Boolean).sort(),
+					contentcategory: [...new Set(contentcategory.map((value) => value || 'uncategorized'))].sort(),
+					attribution: attribution.filter(Boolean).sort()
+				}
+			}
 		};
 	} catch (error) {
 		console.error('Could not load default records:', error);
-		return { defaultRecords: [] };
+		return { defaultRecords: [], wall: emptyWall };
 	}
 };

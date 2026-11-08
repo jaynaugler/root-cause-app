@@ -5,6 +5,7 @@
 	import ResultsCard from '#lib/components/resultsCard/ResultsCard.svelte';
 	import MagicBorder from '#lib/components/search/MagicBorder.svelte';
 	import SearchBox from '#lib/components/search/SearchBox.svelte';
+	import { Button } from '#lib/components/ui/button/index.js';
 	import { MAX_HISTORY, type ThreadTurn } from '#lib/search.js';
 
 	let { data, form } = $props();
@@ -109,10 +110,30 @@
 		)
 	);
 
+	function wallPageUrl(page: number) {
+		const params = new URLSearchParams();
+		for (const [key, value] of Object.entries(data.wall.filters)) {
+			if (value) params.set(key, value);
+		}
+		params.set('sort', data.wall.sort);
+		params.set('page', String(page));
+		return `/?${params.toString()}`;
+	}
+
 	// One submit handler for both forms; `mode` decides whether the answer replaces or extends the thread
 	// Scroll an element to the top of the screen (scroll-mt-6 on the target leaves a small gap)
 	function scrollToTop(id: string) {
 		document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+	}
+
+	function resetSearch() {
+		if (pending) return;
+		thread = [];
+		form = null;
+		newQuestion = '';
+		followUp = '';
+		recentsOpen = true;
+		tick().then(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
 	}
 
 	function submitTo(mode: Mode): SubmitFunction {
@@ -166,7 +187,14 @@
 <main class="container mx-auto max-w-6xl px-4 pt-12 space-y-8">
 	<!-- Narrow, centered column for the title + search box; results below keep the full width -->
 	<header class="mx-auto max-w-2xl space-y-4">
-		<h1 class="text-2xl font-semibold">Search the archive</h1>
+		<div class="flex items-center justify-between gap-4">
+			<h1 class="text-2xl font-semibold">Search the archive</h1>
+			{#if turns.length || newQuestion || followUp || form}
+				<Button type="button" variant="outline" size="sm" onclick={resetSearch} disabled={!!pending}>
+					Reset search
+				</Button>
+			{/if}
+		</div>
 
 		<!-- New search: starts a fresh thread -->
 		<form method="POST" action="?/search" class="w-full space-y-2" use:enhance={submitTo('new')}>
@@ -177,10 +205,57 @@
 		</form>
 	</header>
 
+	<!-- MongoDB card-wall controls: never sent to the search API. -->
+	{#if !turns.length && !pending}
+		<form method="GET" action="/" class="space-y-3 rounded-xl border border-orange-200/70 bg-orange-50/30 p-4">
+			<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+				<label class="space-y-1 text-sm font-medium">
+					Type
+					<select name="resourceformat" value={data.wall.filters.resourceformat} class="block w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+						<option value="">All types</option>
+						{#each data.wall.options.resourceformat as option (option)}
+							<option value={option}>{option}</option>
+						{/each}
+					</select>
+				</label>
+				<label class="space-y-1 text-sm font-medium">
+					Category
+					<select name="contentcategory" value={data.wall.filters.contentcategory} class="block w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+						<option value="">All categories</option>
+						{#each data.wall.options.contentcategory as option (option)}
+							<option value={option}>{option}</option>
+						{/each}
+					</select>
+				</label>
+				<label class="space-y-1 text-sm font-medium">
+					Attribution
+					<select name="attribution" value={data.wall.filters.attribution} class="block w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+						<option value="">All attributions</option>
+						{#each data.wall.options.attribution as option (option)}
+							<option value={option}>{option}</option>
+						{/each}
+					</select>
+				</label>
+				<label class="space-y-1 text-sm font-medium">
+					Sort
+					<select name="sort" value={data.wall.sort} class="block w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+						<option value="newest">Newest first</option>
+						<option value="oldest">Oldest first</option>
+						<option value="title">Title A–Z</option>
+					</select>
+				</label>
+			</div>
+			<div class="flex items-center gap-2">
+				<Button type="submit">Apply</Button>
+				<Button type="button" variant="outline" href="/">Clear</Button>
+			</div>
+		</form>
+	{/if}
+
 	<!-- Browse list: open on a fresh visit; collapses on search, then it's a toggle -->
 	<details bind:open={recentsOpen} class="recents space-y-3">
 		<summary class="cursor-pointer text-sm font-medium text-muted-foreground select-none">
-			Recent records
+			Browse records ({data.wall.total})
 		</summary>
 		<div class="mt-3 space-y-3">
 			{#if data.defaultRecords.length}
@@ -189,9 +264,26 @@
 						<ResultsCard result={record} number={i + 1} anchorId={'default-' + i} />
 					{/each}
 				</div>
+				{#if data.wall.pageCount > 1}
+					<div class="flex items-center justify-center gap-3 pt-2 text-sm">
+						{#if data.wall.page > 1}
+							<Button variant="outline" href={wallPageUrl(data.wall.page - 1)}>Previous</Button>
+						{:else}
+							<Button variant="outline" disabled>Previous</Button>
+						{/if}
+						<span>Page {data.wall.page} of {data.wall.pageCount}</span>
+						{#if data.wall.page < data.wall.pageCount}
+							<Button variant="outline" href={wallPageUrl(data.wall.page + 1)}>Next</Button>
+						{:else}
+							<Button variant="outline" disabled>Next</Button>
+						{/if}
+					</div>
+				{/if}
 			{:else}
 				<p class="text-sm text-muted-foreground">
-					No records in the archive yet. You can add one on the
+					{Object.values(data.wall.filters).some(Boolean)
+							? 'No records match the current filters.'
+							: 'No records in the archive yet. You can add one on the'}
 					<a href="/submit" class="underline">submit page</a>.
 				</p>
 			{/if}
