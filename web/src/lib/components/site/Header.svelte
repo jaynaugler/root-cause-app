@@ -13,6 +13,7 @@
 	// /submit itself is protected by requireUser() in submit/+page.server.ts.
 	let links = $derived([
 		{ label: 'Home', href: '/' },
+		{ label: 'About', href: '/about' },
 		...(user ? [{ label: 'Submit request', href: '/submit' }] : [])
 	]);
 
