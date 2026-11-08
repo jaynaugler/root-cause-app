@@ -35,7 +35,7 @@ export function truncateTeaser(text: string, cap: number = MAX_DESCRIPTION_LENGT
 	if (sentenceEnd >= cap * 0.5) return cut.slice(0, sentenceEnd + 1);
 	const space = cut.lastIndexOf(' ');
 	if (space > cap * 0.5) return cut.slice(0, space) + '…';
-	return cut + '…';
+	return cut.slice(0, -1) + '…';
 }
 
 export type ResourceCategory = (typeof RESOURCE_CATEGORIES)[number];

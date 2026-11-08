@@ -8,6 +8,7 @@ without a downloadable text link (e.g. audio-only entries).
 
 Usage (from api/):
   uv run python scripts/populate_books.py --db local            # or atlas
+  uv run python scripts/populate_books.py --db local --reseed   # replace books only
 """
 
 import sys
@@ -24,6 +25,7 @@ from datetime import UTC, datetime
 import httpx
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"
+AI_CONCURRENCY = 1  # parallel cleanup calls exceed AI Studio's free-tier rate limit
 
 LIST_URLS = [
 	"https://www.gutenberg.org/ebooks/bookshelf/6",  # African American Writers
@@ -73,7 +75,7 @@ def _truncate_teaser(text: str, cap: int = 150) -> str:
 	space = cut.rfind(" ")
 	if space > cap // 2:
 		return cut[:space] + "…"
-	return cut + "…"
+	return cut[:-1] + "…"
 
 
 def _normalize_texts(record: dict) -> None:
@@ -142,7 +144,7 @@ async def _process_one(
 			print(f"  {id}: ❌ {type(exc).__name__}: {exc}")
 
 
-async def main(db_target: str) -> None:
+async def main(db_target: str, reseed: bool = False) -> None:
 	# Real env vars override the root .env — make --db local mean it
 	if db_target == "local":
 		import os
@@ -162,6 +164,9 @@ async def main(db_target: str) -> None:
 
 	_, db_name, target = resolve_db_config()
 	collection = motor_db["resources"]
+	if reseed:
+		result = await collection.delete_many({"resourceformat": "book"})
+		print(f"reseed: removed {result.deleted_count} existing book records")
 
 	# Duplicates: any stored record pointing at the same Gutenberg id. The two
 	# conditions are separate $or elements — one element holding both keys
@@ -237,7 +242,7 @@ async def main(db_target: str) -> None:
 		return
 
 	results: dict = {"inserted": 0, "failed": []}
-	slots = asyncio.Semaphore(4)
+	slots = asyncio.Semaphore(AI_CONCURRENCY)
 	todo = sorted((id for id in ids if id not in existing), key=int)
 	await asyncio.gather(*(_process_one(id, slots, collection, results) for id in todo))
 
@@ -308,7 +313,7 @@ async def _enrich(collection, refresh: bool = False) -> None:
 	print(f"enrichment candidates: {len(todo)}")
 
 	results: dict = {"updated": 0, "failed": []}
-	slots = asyncio.Semaphore(4)
+	slots = asyncio.Semaphore(AI_CONCURRENCY)
 
 	async def one(id: str) -> None:
 		async with slots:
@@ -354,5 +359,10 @@ if __name__ == "__main__":
 	parser.add_argument(
 		"--refresh", action="store_true", help="re-clean ALL books with the current prompt (titles, descriptions)"
 	)
+	parser.add_argument(
+		"--reseed", action="store_true", help="replace all book records with a fresh listing import"
+	)
 	args = parser.parse_args()
-	asyncio.run(main(args.db))
+	if args.reseed and (args.enrich or args.refresh):
+		parser.error("--reseed cannot be combined with --enrich or --refresh")
+	asyncio.run(main(args.db, reseed=args.reseed))

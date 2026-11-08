@@ -9,6 +9,7 @@ falls back to the raw record — e.g. the "national historical person" upgrade
 of a source's "national hero" wording would be caught by the gate).
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -184,6 +185,19 @@ def _optional(value, cap: int = MAX_SUMMARY_CHARS) -> str | None:
 	return value[:cap] if value else None
 
 
+def _description(value) -> str | None:
+	"""Cap a card teaser at a sentence or word boundary, never mid-word."""
+	text = _optional(value)
+	if text is None or len(text) <= MAX_DESCRIPTION_CHARS:
+		return text
+	cut = text[:MAX_DESCRIPTION_CHARS]
+	sentence_end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+	if sentence_end >= MAX_DESCRIPTION_CHARS // 2:
+		return cut[: sentence_end + 1]
+	space = cut.rfind(" ")
+	return (cut[:space] if space > MAX_DESCRIPTION_CHARS // 2 else cut[:-1]) + "…"
+
+
 def _claims_problems(cleaned: dict, given_text: str) -> list[str]:
 	"""Gate every model-authored free-text field against what the model received."""
 	problems: list[str] = []
@@ -199,9 +213,17 @@ async def _generate(payload: dict) -> dict:
 		f"{settings.gemini_model}:generateContent"
 	)
 	async with httpx.AsyncClient(timeout=settings.gemini_timeout) as client:
-		resp = await client.post(
-			url, json=payload, headers={"x-goog-api-key": settings.gemini_api_key}
-		)
+		for attempt in range(3):
+			resp = await client.post(
+				url, json=payload, headers={"x-goog-api-key": settings.gemini_api_key}
+			)
+			if resp.status_code not in {429, 500, 502, 503, 504}:
+				break
+			if attempt == 2:
+				break
+			# AI Studio occasionally returns transient high-demand 503s. Keep the
+			# existing raw-record fallback, but don't give up on the first one.
+			await asyncio.sleep(2**attempt)
 	resp.raise_for_status()
 	parts = resp.json()["candidates"][0]["content"]["parts"]
 	cleaned = json.loads("".join(part.get("text", "") for part in parts))
@@ -269,7 +291,7 @@ async def clean_record(fields: dict) -> dict:
 	summary = _optional(cleaned.get("summary"))
 	return {
 		"title": _optional(cleaned.get("title")),
-		"description": _optional(cleaned.get("description"), MAX_DESCRIPTION_CHARS),
+		"description": _description(cleaned.get("description")),
 		# Enforce the schema's bar here as well: a too-short summary inserts as
 		# null (description + link stay searchable) instead of failing validation.
 		"summary": summary if summary and len(summary) >= MIN_SUMMARY_CHARS else None,
