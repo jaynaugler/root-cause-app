@@ -12,6 +12,7 @@ from pymongo.errors import PyMongoError
 
 from app.db import db
 from app.pdf import _REQUEST_SLOTS, PdfUrlIn, _run_pdf_metadata
+from app.video import VideoUrlIn, _run_video_metadata
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -111,7 +112,7 @@ async def get_pending_resources(limit: int = 100):
 
 @router.post("/moderate/approve/{doc_id}")
 async def approve_resource(doc_id: str):
-    """Approve a raw submission and execute the PDF extraction & AI pipeline on it."""
+    """Approve a raw submission and execute the source extraction & AI pipeline on it."""
     oid = _parse_object_id(doc_id)
 
     doc = await coll.find_one({"_id": oid})
@@ -128,7 +129,10 @@ async def approve_resource(doc_id: str):
     if doc_url and str(doc_url).startswith(("http://", "https://")):
         try:
             async with _REQUEST_SLOTS:
-                meta = await _run_pdf_metadata(PdfUrlIn(url=doc_url))
+                if "youtube.com" in str(doc_url).lower() or "youtu.be" in str(doc_url).lower():
+                    meta = await _run_video_metadata(VideoUrlIn(url=doc_url))
+                else:
+                    meta = await _run_pdf_metadata(PdfUrlIn(url=doc_url))
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001 — pipeline failure falls back gracefully
@@ -143,6 +147,7 @@ async def approve_resource(doc_id: str):
         "attribution": meta.get("attribution") or doc.get("name"),
         "contentcategory": meta.get("contentcategory"),
         "resourceformat": meta.get("resourceformat", "pdf"),
+        "imgurl": meta.get("imgurl"),
     }
 
     try:

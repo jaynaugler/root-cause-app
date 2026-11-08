@@ -3,13 +3,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.bad_links import router as bad_links_router
 from app.book import router as book_router
 from app.config import get_allowed_origins
 from app.db import client, db
 from app.items import router as items_router
-from app.pdf import router as pdf_router
-from app.bad_links import router as bad_links_router
 from app.moderate import router as moderate_router
+from app.pdf import router as pdf_router
+from app.video import router as video_router
 
 
 @asynccontextmanager
@@ -35,6 +36,7 @@ if origins := get_allowed_origins():
 app.include_router(book_router, prefix="/api")
 app.include_router(items_router, prefix="/api")
 app.include_router(pdf_router, prefix="/api")
+app.include_router(video_router, prefix="/api")
 app.include_router(bad_links_router, prefix="/api")
 app.include_router(moderate_router, prefix="/api")
 
