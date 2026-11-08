@@ -17,6 +17,8 @@
 	import UserIcon from '@lucide/svelte/icons/user';
 	import MailIcon from '@lucide/svelte/icons/mail';
 
+	type Feed = { id: string; title: string; url: string };
+
 	type PendingSubmission = {
 		id: string;
 		name: string | null;
@@ -55,6 +57,12 @@
 
 	let actionLoading = $state<string | null>(null);
 	const URL_PATTERN = /^https?:\/\/\S+$/;
+
+	let feeds = $state<Feed[]>([]);
+	let feedUrl = $state('');
+	let feedAdding = $state(false);
+	let feedChecking = $state(false);
+	let feedMessage = $state('');
 
 	function getDocumentUrl(item: PendingSubmission): string | null {
 		if (item.attachmentUrl) return item.attachmentUrl;
@@ -245,6 +253,58 @@
 		}
 	}
 
+	async function fetchFeeds() {
+		try {
+			const res = await fetch('/api/feeds');
+			if (res.ok) feeds = (await res.json()).feeds ?? [];
+		} catch {
+			feedMessage = 'Could not load RSS feeds.';
+		}
+	}
+
+	async function addFeed(event: SubmitEvent) {
+		event.preventDefault();
+		feedMessage = '';
+		if (!URL_PATTERN.test(feedUrl.trim())) {
+			feedMessage = 'Enter a full feed URL starting with http:// or https://.';
+			return;
+		}
+		feedAdding = true;
+		try {
+			const res = await fetch('/api/feeds', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ url: feedUrl.trim() })
+			});
+			const body = await res.json().catch(() => null);
+			if (!res.ok) throw new Error(body?.detail ?? 'Could not add that feed.');
+			feedUrl = '';
+			feedMessage = body.added ? 'Feed added.' : 'That feed is already listed.';
+			await fetchFeeds();
+		} catch (error) {
+			feedMessage = error instanceof Error ? error.message : 'Could not add that feed.';
+		} finally {
+			feedAdding = false;
+		}
+	}
+
+	async function checkFeeds() {
+		feedChecking = true;
+		feedMessage = '';
+		try {
+			const res = await fetch('/api/feeds/check', { method: 'POST' });
+			const body = await res.json().catch(() => null);
+			if (!res.ok) throw new Error(body?.detail ?? 'Feed check failed.');
+			feedMessage = `${body.inserted} added, ${body.duplicates} duplicates skipped across ${body.feedsChecked} feeds.`;
+			if (body.failed?.length) feedMessage += ` ${body.failed.length} entries or feeds failed.`;
+			await Promise.all([fetchQueue(), fetchFeeds()]);
+		} catch (error) {
+			feedMessage = error instanceof Error ? error.message : 'Feed check failed.';
+		} finally {
+			feedChecking = false;
+		}
+	}
+
 	function formatDate(dateStr: string | null): string {
 		if (!dateStr) return '—';
 		try {
@@ -260,6 +320,7 @@
 
 	onMount(() => {
 		fetchQueue();
+		fetchFeeds();
 	});
 </script>
 
@@ -268,6 +329,54 @@
 </svelte:head>
 
 <main class="container mx-auto max-w-4xl px-4 py-12 space-y-6">
+	<Card.Root class="border-orange-200/80 shadow-md">
+		<Card.Header>
+			<Card.Title class="text-lg font-bold text-[#2A1A10]">RSS & Atom feeds</Card.Title>
+			<Card.Description class="text-xs text-muted-foreground">
+				Add recent stories and podcast episodes to the pending queue. Existing links are skipped.
+			</Card.Description>
+		</Card.Header>
+		<Card.Content class="space-y-4">
+			<form class="flex flex-col gap-2 sm:flex-row" onsubmit={addFeed}>
+				<Input
+					type="url"
+					bind:value={feedUrl}
+					placeholder="https://example.com/feed.xml"
+					aria-label="RSS or Atom feed URL"
+					disabled={feedAdding}
+				/>
+				<Button type="submit" class="shrink-0 bg-orange-700 text-white hover:bg-orange-800" disabled={feedAdding}>
+					{feedAdding ? 'Adding…' : 'Add feed'}
+				</Button>
+			</form>
+			{#if feeds.length}
+				<ul class="space-y-2 rounded-lg border border-orange-100 bg-orange-50/30 p-3 text-xs">
+					{#each feeds as feed (feed.id)}
+						<li>
+							<p class="font-semibold text-foreground">{feed.title}</p>
+							<p class="break-all text-muted-foreground">{feed.url}</p>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+			<div class="flex flex-wrap items-center gap-3">
+				<Button
+					type="button"
+					variant="outline"
+					class="border-orange-200 text-xs hover:bg-orange-50"
+					onclick={checkFeeds}
+					disabled={feedChecking || !feeds.length}
+				>
+					<RefreshCwIcon class="size-3.5 {feedChecking ? 'animate-spin' : ''}" />
+					{feedChecking ? 'Checking feeds…' : 'Check recent stories'}
+				</Button>
+				{#if feedMessage}
+					<p class="text-xs text-muted-foreground" role="status">{feedMessage}</p>
+				{/if}
+			</div>
+		</Card.Content>
+	</Card.Root>
+
 	<Card.Root class="border-orange-200/80 shadow-md">
 		<Card.Header class="flex flex-row items-center justify-between border-b border-orange-100 pb-4">
 			<div class="space-y-1">

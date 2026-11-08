@@ -17,8 +17,8 @@ export const RESOURCE_CATEGORIES = [
 // 'unapproved' is unused today: everything is inserted 'approved' for now.
 export const RESOURCE_STATUSES = ['pending', 'approved', 'unapproved'] as const;
 
-// Formats the fetch pipeline produces (api/app/pdf.py, book.py, video.py).
-export const RESOURCE_FORMATS = ['pdf', 'book', 'video'] as const;
+// Formats the fetch and feed pipelines produce.
+export const RESOURCE_FORMATS = ['pdf', 'book', 'video', 'article', 'podcast'] as const;
 
 // Shared length rules (enforced by the Mongoose schema, the DB validator, and
 // the insert flow's description→summary fallback slice).
@@ -52,7 +52,7 @@ export interface ResourceDoc {
 	submittedSummary?: string | null; // submitter-written summary; removed on approval
 	summary: string | null; // ≥250 chars, full cleaned summary (search data)
 	attribution: string | null;
-	resourceformat: (typeof RESOURCE_FORMATS)[number]; // 'pdf' | 'book' | 'video'
+	resourceformat: (typeof RESOURCE_FORMATS)[number];
 	contentcategory: ResourceCategory | null;
 	imgurl: string | null;
 	status: ResourceStatus;
