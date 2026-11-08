@@ -22,6 +22,7 @@
 		type PanelSearch,
 		type ThreadTurn
 	} from '#lib/search.js';
+	import backgroundPattern from '#lib/assets/backgroundPattern.webp';
 
 	let { data, form } = $props();
 	// Text of the main search box. Starts from `form` so a no-JS submit (full page reload) keeps the
@@ -503,42 +504,55 @@
 	{/if}
 {/snippet}
 
-<main class="container mx-auto max-w-6xl px-4 pt-12 space-y-8">
+<main class="container mx-auto max-w-6xl px-4 space-y-8">
 	<!-- Title + search box, as wide as the answers below -->
-	<section class="relative overflow-hidden bg-[#FF8C4B] px-4 pb-28 pt-8 text-center md:pb-32 md:pt-12">
-	<header class="space-y-4">
-		<div class="flex items-center justify-between gap-4">
-			<h1 class="text-2xl font-semibold">Search the archive</h1>
-			{#if turns.length || newQuestion || followUp || form || browseFiltered}
-				<Button type="button" variant="outline" size="sm" onclick={resetSearch} disabled={!!pending}>
-					Reset search
-				</Button>
-			{/if}
+	<section class="relative left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] w-screen overflow-hidden bg-[#FF8C4B] pt-8 pb-6 md:pb-8">
+		<div
+			aria-hidden="true"
+			class="pointer-events-none absolute inset-x-0 top-0 h-8 opacity-40 mix-blend-multiply"
+			style={`background-image: url("${backgroundPattern}"); background-size: auto 450%; background-position: center bottom; background-repeat: repeat-x;`}
+		></div>
+		<div
+			aria-hidden="true"
+			class="pointer-events-none absolute inset-x-0 bottom-0 h-8 opacity-40 mix-blend-multiply"
+			style={`background-image: url("${backgroundPattern}"); background-size: auto 450%; background-position: center top; background-repeat: repeat-x;`}
+		></div>
+
+		<div class="relative z-10 mx-auto w-full max-w-6xl px-4">
+			<header class="space-y-4">
+				<div class="flex items-center justify-between gap-4">
+					<h1 class="text-2xl font-semibold">Search the archive</h1>
+					{#if turns.length || newQuestion || followUp || form || browseFiltered}
+						<Button type="button" variant="outline" size="sm" onclick={resetSearch} disabled={!!pending}>
+							Reset search
+						</Button>
+					{/if}
+				</div>
+
+				<!-- New search: starts a fresh thread -->
+				<form method="POST" action="?/search" class="w-full space-y-2" use:enhance={submitTo('new')}>
+					{@render filterInputs()}
+					<MagicBorder active={pending?.mode === 'new'} rounded="rounded-2xl">
+						<SearchBox bind:value={newQuestion} disabled={!!pending} />
+					</MagicBorder>
+					{@render errors('new')}
+				</form>
+
+				<!-- The filter bar, right under the search box. Before the first question it narrows
+						"Recent records"; once there is an answer, its filters are the newest answer's: a
+						change re-runs the newest question (also a follow-up further down). New questions
+						use the filters too. Outside the <form>, so its buttons and checkboxes never submit it. -->
+				<FilterBar
+					filters={currentFilters}
+					disabled={!!pending}
+					onClearAll={() => changeFilters({})}
+					panel={filterPanel}
+				/>
+				{#if refineError || browseError}
+					<p class="text-sm font-medium text-red-500">{refineError || browseError}</p>
+				{/if}
+			</header>
 		</div>
-
-		<!-- New search: starts a fresh thread -->
-		<form method="POST" action="?/search" class="w-full space-y-2" use:enhance={submitTo('new')}>
-			{@render filterInputs()}
-			<MagicBorder active={pending?.mode === 'new'} rounded="rounded-2xl">
-				<SearchBox bind:value={newQuestion} disabled={!!pending} />
-			</MagicBorder>
-			{@render errors('new')}
-		</form>
-
-		<!-- The filter bar, right under the search box. Before the first question it narrows
-		     "Recent records"; once there is an answer, its filters are the newest answer's: a
-		     change re-runs the newest question (also a follow-up further down). New questions
-		     use the filters too. Outside the <form>, so its buttons and checkboxes never submit it. -->
-		<FilterBar
-			filters={currentFilters}
-			disabled={!!pending}
-			onClearAll={() => changeFilters({})}
-			panel={filterPanel}
-		/>
-		{#if refineError || browseError}
-			<p class="text-sm font-medium text-red-500">{refineError || browseError}</p>
-		{/if}
-	</header>
 	</section>
 
 	<!-- Browse list: the newest records (from search-api /api/browse, see +page.server.ts).
