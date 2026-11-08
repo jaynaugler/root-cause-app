@@ -32,8 +32,11 @@ what it has stored. The `sync` container keeps that copy up to date.
 Not the whole Mongo document, only the fields the search needs:
 
 ```
-title, description, summary, attribution, link, resourceformat, contentcategory, imgurl, createdAt
+title, description, summary, attribution, link, sitelink, resourceformat, contentcategory, imgurl, createdAt
 ```
+
+`description` is the short teaser on the cards, `summary` the full text used for search.
+`link` is the resource itself, `sitelink` the page that hosts it.
 
 Two conversions are needed because Meilisearch only understands plain JSON:
 - Mongo's `_id` (an `ObjectId`) becomes a string `id`.

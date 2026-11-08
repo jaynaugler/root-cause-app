@@ -185,9 +185,10 @@ docker compose exec ollama ollama list    # should now show qwen2.5:3b
 The model is stored in the `ollama_data` volume, so you only download it once. To use a different
 model, pull it and set `OLLAMA_MODEL` for `search-api` in `docker-compose.yml`.
 
-**Optional: Gemini.** Put a Google AI Studio key into `GEMINI_API_KEY` and set
-`SUMMARY_PROVIDER=gemini` in `docker-compose.yml`. Gemini is faster. If it fails, search-api
-falls back to Ollama automatically.
+**Gemini.** `docker-compose.yml` sets `SUMMARY_PROVIDER=gemini`, so Gemini writes the answers
+by default. It's faster than Ollama. Put a Google AI Studio key into `GEMINI_API_KEY`. Without
+a key, or when Gemini fails, search-api falls back to Ollama automatically, so you still need the
+Ollama model above. To use only Ollama, set `SUMMARY_PROVIDER=ollama`.
 
 ## 5. Connect MongoDB Atlas
 

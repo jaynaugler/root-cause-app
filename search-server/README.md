@@ -107,7 +107,7 @@ docker compose exec search-api python -c "import httpx; print(httpx.get('http://
 | `MEILI_SEARCH_KEY` | search-api    | Meilisearch key that can **only search** `records`. Created with the master key   |
 | `MEILI_SYNC_KEY`   | sync          | Meilisearch key that can **add/delete documents** in `records`. Created with the master key |
 | `API_KEY`          | search-api    | Shared secret the web app must send as `X-API-Key`. You make it up: `openssl rand -hex 32` |
-| `GEMINI_API_KEY`   | search-api    | Google AI Studio key. Optional; without it, summaries use Ollama only             |
+| `GEMINI_API_KEY`   | search-api    | Google AI Studio key. Gemini is the default AI; without a key, every summary falls back to Ollama |
 | `ATLAS_URI`        | sync          | MongoDB Atlas connection string                                                    |
 | `ATLAS_DB`         | sync          | Database name in Atlas                                                             |
 | `ATLAS_COLLECTION` | sync          | Collection that holds the records                                                  |
@@ -115,8 +115,9 @@ docker compose exec search-api python -c "import httpx; print(httpx.get('http://
 How to create the two Meilisearch keys: [docs/setup.md](docs/setup.md#3-create-the-meilisearch-keys).
 
 Some settings are written directly in `docker-compose.yml` instead of `.env`: `SUMMARY_PROVIDER`
-(`ollama` or `gemini`), `GEMINI_MODEL` and `APPROVED_ONLY`. Tuning values like the score threshold
-have defaults in `main.py`. See [docs/search-api.md](docs/search-api.md#settings).
+(`gemini`; or `ollama`), `GEMINI_MODEL`, `SCORE_THRESHOLD`, `FALLBACK_THRESHOLD` and
+`APPROVED_ONLY`. Other tuning values only have defaults in `main.py`. See
+[docs/search-api.md](docs/search-api.md#settings).
 
 ## Everyday commands
 
@@ -143,8 +144,11 @@ The web app calls search-api only from its **server side**, so the key never rea
   because that path belongs to the Python `api/` service.
 - `load` in `web/src/routes/+page.server.ts` and `web/src/routes/browse/+server.ts`: the "Recent
   records" list before the first question (`/api/browse`), without and with filters.
+- `web/src/routes/health/search-ai/+server.ts`: the AI status on the `/health` page
+  (`/health/ai`).
 
-Both check the input with the rules in `web/src/lib/server/search-params.ts` first. Set these in the **repo-root** `.env` (and in Vercel for production):
+The search, filter and browse calls check the input with the rules in
+`web/src/lib/server/search-params.ts` first. Set these in the **repo-root** `.env` (and in Vercel for production):
 
 ```
 SEARCH_API_URL="https://<search-hostname>"   # without /api/search

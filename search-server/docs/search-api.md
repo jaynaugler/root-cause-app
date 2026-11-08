@@ -1,8 +1,10 @@
 # How a search works (`search-api/main.py`)
 
-`main.py` is one small FastAPI app with four endpoints:
+`main.py` is one small FastAPI app with five endpoints:
 
 - `GET /health` returns `{"status": "ok"}`. It's used to check that the service is alive.
+- `GET /health/ai` checks that the AI models can really answer, see
+  [AI health check](#ai-health-check-get-healthai).
 - `POST /api/search` is the real work, described below.
 - `POST /api/browse` lists the newest records without a question, see
   [Browsing](#browsing-post-apibrowse).
@@ -33,6 +35,7 @@ Content-Type: application/json
 | ---------- | -------- | ---------------------------------------- | ----------------------------------------------- |
 | `question` | yes      | 1–500 characters                         | The new question                                |
 | `limit`    | no       | 1–20, default 8                          | How many records to return at most              |
+| `offset`   | no       | 0 or more, default 0                     | How many records to skip, for the next page. See [Paging](#paging-offset) |
 | `provider` | no       | `"ollama"` or `"gemini"`                 | Which AI writes the answer (default from settings) |
 | `history`  | no       | max 3 turns, oldest first; each `question` ≤ 500, `summary` ≤ 2000 chars | Earlier questions and answers, for follow-ups |
 | `summary`  | no       | `true` (default) or `false`              | `false` skips the AI: only records and counts, in milliseconds (used for filter clicks) |
@@ -45,8 +48,8 @@ Content-Type: application/json
   "summary": "Yes. In 2010 she received a posthumous free pardon … [1]",
   "provider": "gemini",
   "results": [
-    { "id": "…", "title": "…", "description": "…", "attribution": "…", "link": "…",
-      "resourceformat": "pdf", "contentcategory": "history", "imgurl": null,
+    { "id": "…", "title": "…", "description": "…", "summary": "…", "attribution": "…",
+      "link": "…", "sitelink": "…", "resourceformat": "pdf", "contentcategory": "history", "imgurl": null,
       "createdAt": "…", "_rankingScore": 0.83 }
   ],
   "total": 14,
@@ -202,6 +205,15 @@ describe the results the user sees.
 Meilisearch leaves out values with 0 matches. A checked value can therefore be missing from
 `facets`; the UI must still show it (as 0) so the user can uncheck it.
 
+### Paging: `offset`
+
+The web app shows the first `limit` records, and a "show more" button asks again with
+`offset` = the number already shown. Only the **main** search uses `offset`. The count searches
+always start at 0, so `total` and `facets` stay the same on every page.
+
+Meilisearch never returns records past the 1000th (`maxTotalHits`), so pages after that come
+back empty. `total` also stops at 1000, so the web app never asks for them.
+
 We use `MEILI_SEARCH_KEY`, a key that can **only search**. Even if search-api had a bug, it
 couldn't change the index.
 
@@ -272,6 +284,7 @@ Content-Type: application/json
 | Field     | Required | Rules                    | Meaning                         |
 | --------- | -------- | ------------------------ | ------------------------------- |
 | `limit`   | no       | 1–50, default 12         | How many records to return      |
+| `offset`  | no       | 0 or more, default 0     | How many records to skip, for the next page |
 | `filters` | no       | same as in `/api/search` | Only records with these values  |
 
 The response has `results`, `total` and `facets`, in the same shape as `/api/search`, but no
@@ -367,6 +380,33 @@ last, except checked ones (`sort_options()`).
 Raise it before the source list grows past that, see
 [setup](setup.md#allow-long-value-lists-filter-panels).
 
+## AI health check: `GET /health/ai`
+
+`/health` only says that search-api is running. `/health/ai` checks that the AI models can
+really **write** an answer: it asks each one to reply "OK".
+
+```http
+GET /health/ai
+X-API-Key: <API_KEY>
+```
+
+```json
+{
+  "status": "healthy",
+  "checked_at": 1794234000.5,
+  "providers": { "ollama": "healthy", "gemini": "healthy" }
+}
+```
+
+- Each provider is `healthy`, `unhealthy` or `not_configured` (Gemini without `GEMINI_API_KEY`).
+- `status` is `healthy` when no provider is `unhealthy`. Otherwise the answer is `503`.
+- `checked_at` is when the check really ran (Unix time in seconds).
+- **Cached for 5 minutes.** Every check calls the AI, and Gemini costs money, so a page that is
+  refreshed often doesn't trigger a new check each time. Each check gives up after 20 seconds.
+- It needs the API key, like the search endpoints. Without it: `401`.
+
+The web app shows it on its `/health` page, through `web/src/routes/health/search-ai/+server.ts`.
+
 ## Settings
 
 Read from environment variables when the container starts. To change one, set it under
@@ -380,12 +420,12 @@ Read from environment variables when the container starts. To change one, set it
 | `SEMANTIC_RATIO`   | `0.5`                      | no              | Keyword vs meaning mix (0–1)                     |
 | `SCORE_THRESHOLD`  | `0.7`                      | yes (`0.7`)     | Minimum match score (0–1)                        |
 | `FALLBACK_THRESHOLD` | `0.6`                    | yes (`0.6`)     | Second try when nothing reaches `SCORE_THRESHOLD`. Same value = off |
-| `SUMMARY_PROVIDER` | `ollama`                   | yes (`ollama`)  | Default AI: `ollama` or `gemini`                 |
+| `SUMMARY_PROVIDER` | `ollama`                   | yes (`gemini`)  | Default AI: `ollama` or `gemini`                 |
 | `SUMMARY_SOURCES`  | `5`                        | no              | How many top hits go into the prompt             |
 | `OLLAMA_URL`       | `http://ollama:11434`      | no              | Where Ollama is                                  |
 | `OLLAMA_MODEL`     | `qwen2.5:3b`               | no              | Must be pulled first (see setup)                 |
 | `OLLAMA_TIMEOUT`   | `60` seconds               | no              | Give up on Ollama after this long                |
-| `GEMINI_API_KEY`   | empty                      | from `.env`     | Empty = Gemini disabled (always falls back)      |
+| `GEMINI_API_KEY`   | empty                      | from `.env`     | Empty = Gemini disabled (always falls back to Ollama) |
 | `GEMINI_MODEL`     | `gemini-3.5-flash-lite`    | yes             | Which Gemini model                               |
 | `GEMINI_TIMEOUT`   | `20` seconds               | no              | Give up on Gemini after this long                |
 
