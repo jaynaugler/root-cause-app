@@ -544,7 +544,7 @@
 
 <main class="container mx-auto max-w-6xl px-4 space-y-8">
 	<!-- Title + search box, as wide as the answers below -->
-	<section class="relative left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] w-screen overflow-hidden bg-[#FF8C4B] pt-8 pb-6 md:pb-8">
+	<section class="relative left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] w-screen overflow-x-clip bg-[#FF8C4B] pt-8 pb-6 md:pb-8">
 		<div
 			aria-hidden="true"
 			class="pointer-events-none absolute inset-x-0 top-0 h-8 opacity-40 mix-blend-multiply"
