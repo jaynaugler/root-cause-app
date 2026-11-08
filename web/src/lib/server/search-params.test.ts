@@ -1,6 +1,7 @@
 // Tests for search-params.ts: what the search action and the filter panels accept.
 import { describe, expect, it } from 'vitest';
 import {
+	browseRequestSchema,
 	facetsRequestSchema,
 	parseFilters,
 	parseFiltersJson,
@@ -73,9 +74,23 @@ describe('facetsRequestSchema', () => {
 		});
 	});
 
-	it('rejects a wrong sort, limit or missing question', () => {
+	it('rejects a wrong sort or limit, or a too long question', () => {
 		expect(facetsRequestSchema.safeParse({ question: 'x', sort: 'random' }).success).toBe(false);
 		expect(facetsRequestSchema.safeParse({ question: 'x', limit: 500 }).success).toBe(false);
-		expect(facetsRequestSchema.safeParse({ question: '   ' }).success).toBe(false);
+		expect(facetsRequestSchema.safeParse({ question: 'x'.repeat(501) }).success).toBe(false);
+	});
+
+	it('allows no question: browsing, before the first question', () => {
+		expect(facetsRequestSchema.parse({}).question).toBe('');
+		expect(facetsRequestSchema.parse({ question: '   ' }).question).toBe('');
+	});
+});
+
+describe('browseRequestSchema', () => {
+	it('reads the filters with the same rules, and allows none', () => {
+		expect(browseRequestSchema.parse({ filters: { contentcategory: ['people'], year: ['1946'] } })).toEqual(
+			{ filters: { contentcategory: ['people'] } }
+		);
+		expect(browseRequestSchema.parse({})).toEqual({ filters: {} });
 	});
 });

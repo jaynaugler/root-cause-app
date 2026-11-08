@@ -312,7 +312,7 @@ Content-Type: application/json
 
 | Field      | Required | Rules                                  | Meaning                                          |
 | ---------- | -------- | -------------------------------------- | ------------------------------------------------ |
-| `question`, `history`, `filters` | yes / no / no | same as in `/api/search` | The search the records on the page come from |
+| `question`, `history`, `filters` | no | same as in `/api/search`, but `question` may be empty | The search the records on the page come from. No question = browsing, see below |
 | `facet`    | yes      | one of the `FacetField` names          | The field whose values the panel lists           |
 | `search`   | no       | 0–100 characters                       | Only values containing this text. Case and accents don't matter: `univ` finds "Université" |
 | `sort`     | no       | `"count"` (default) or `"alpha"`       | Most records first (ties A–Z), or A–Z            |
@@ -346,6 +346,12 @@ the other filters (see [Filters and counts](#filters-and-counts-facets)). The th
 the same way too (`run_with_fallback()`): a main search with `limit: 1` decides whether 0.7 or 0.6
 applies. Without this, the panel could say "People (12)" while the page shows records from the
 looser threshold.
+
+**Browsing (no question).** Before the first question, the search page lets people filter the
+newest records ([`/api/browse`](#browsing-post-apibrowse)). Its panels send no `question` (or an
+empty one). Then every search here is a placeholder search (`"q": ""`) with no threshold, like
+`/api/browse`, and the counts are those of the whole archive (with the other filters). `history`
+is ignored.
 
 **Values with 0 matches.** Meilisearch leaves them out of the counts. To still list them
 (the panel shows them disabled, last), a second request asks for every value in the whole archive:

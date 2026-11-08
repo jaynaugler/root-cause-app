@@ -1,6 +1,7 @@
 import { SEARCH_API_URL, SEARCH_API_KEY } from '$app/env/private';
 import { fail } from '@sveltejs/kit';
-import { type SearchResponse, type ThreadTurn } from '#lib/search.js';
+import { RECENT_LIMIT, type SearchResponse, type SearchResult, type ThreadTurn } from '#lib/search.js';
+import { browseArchive } from '#lib/server/search-api.js';
 // The question / history / filter checks are shared with the filter panels' route
 import { parseFilters, parseHistory, searchSchema } from '#lib/server/search-params.js';
 import type { Actions, PageServerLoad } from './$types';
@@ -56,47 +57,17 @@ export const actions: Actions = {
 	}
 };
 
-import { getResourceModel } from '#lib/server/resources.js';
-
-// Landing state: recent approved records so the page has content before the
-// first search. A database failure must not take the whole page down — an
-// empty list just means the browse section falls back to the "no records" note.
-export const load: PageServerLoad = async () => {
+// Landing state: the newest records, so the page has content before the first question.
+// They come from search-api (/api/browse), the same index the search and the filter counts
+// use, so the list and the counts always agree (MongoDB could hold records that aren't
+// indexed yet). A failure must not take the whole page down: the list then says it couldn't
+// load. 5 seconds at most, so a slow search server can't hold up the page for long.
+export const load: PageServerLoad = async ({ fetch }) => {
 	try {
-		const Resource = await getResourceModel();
-		const docs = await Resource.find(
-			{ status: 'approved' },
-			{
-				title: 1,
-				description: 1,
-				summary: 1,
-				attribution: 1,
-				link: 1,
-				sitelink: 1,
-				resourceformat: 1,
-				contentcategory: 1,
-				createdAt: 1
-			}
-		)
-			.sort({ createdAt: -1 })
-			.limit(12)
-			.lean();
-		return {
-			defaultRecords: docs.map((doc) => ({
-				id: String(doc._id),
-				title: doc.title ?? undefined,
-				description: doc.description ?? undefined,
-				summary: doc.summary ?? undefined,
-				attribution: doc.attribution ?? undefined,
-				link: doc.link,
-				sitelink: doc.sitelink ?? undefined,
-				resourceformat: doc.resourceformat,
-				contentcategory: doc.contentcategory ?? undefined,
-				createdAt: doc.createdAt.toISOString()
-			}))
-		};
+		const { results, total } = await browseArchive(fetch, {}, RECENT_LIMIT, AbortSignal.timeout(5_000));
+		return { recent: { results, total, failed: false } };
 	} catch (error) {
-		console.error('Could not load default records:', error);
-		return { defaultRecords: [] };
+		console.error('Could not load the recent records:', error);
+		return { recent: { results: [] as SearchResult[], total: 0, failed: true } };
 	}
 };

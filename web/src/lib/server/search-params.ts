@@ -90,7 +90,8 @@ export function parseFiltersJson(raw: unknown): Filters {
 // filters are checked leniently by the functions above, the rest strictly (a 400 if wrong):
 // only our own panel code sends this, so a wrong value is a bug worth seeing.
 export const facetsRequestSchema = z.object({
-	question: questionSchema,
+	// Empty = browsing (no question asked yet): search-api counts the whole archive
+	question: z.string().trim().max(MAX_QUESTION_CHARS).default(''),
 	// .default() first: in zod 4 a key with a transform is required otherwise
 	history: z.unknown().default([]).transform(parseHistory),
 	filters: z.unknown().default({}).transform(parseFiltersJson),
@@ -98,4 +99,9 @@ export const facetsRequestSchema = z.object({
 	sort: z.enum(['count', 'alpha']).default('count'),
 	limit: z.number().int().min(1).max(100).default(8),
 	cursor: z.string().max(200).nullish()
+});
+
+// The JSON body of POST /browse: only the filters (the list length is fixed, RECENT_LIMIT)
+export const browseRequestSchema = z.object({
+	filters: z.unknown().default({}).transform(parseFiltersJson)
 });

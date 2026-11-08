@@ -141,6 +141,8 @@ The web app calls search-api only from its **server side**, so the key never rea
   the home page `/`
 - `web/src/routes/facets/[facet]/+server.ts`: the filter panels (`/api/facets`). Not under `/api`,
   because that path belongs to the Python `api/` service.
+- `load` in `web/src/routes/+page.server.ts` and `web/src/routes/browse/+server.ts`: the "Recent
+  records" list before the first question (`/api/browse`), without and with filters.
 
 Both check the input with the rules in `web/src/lib/server/search-params.ts` first. Set these in the **repo-root** `.env` (and in Vercel for production):
 

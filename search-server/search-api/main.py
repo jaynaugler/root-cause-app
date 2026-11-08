@@ -99,7 +99,8 @@ class BrowseRequest(BaseModel):
 class FacetsRequest(BaseModel):
     """One filter panel: the values of one field, with counts, for the same question and
     filters as the records on the page (same rules as SearchRequest)."""
-    question: str = Field(min_length=1, max_length=500)
+    # Empty = browsing (no question asked yet): count the whole archive, like /api/browse
+    question: str = Field(default="", max_length=500)
     history: list[Turn] = Field(default_factory=list, max_length=3)
     filters: Filters = Field(default_factory=dict)
     facet: FacetField  # the field whose values the panel lists
@@ -439,12 +440,19 @@ async def facet_options(req: FacetsRequest, x_api_key: str = Header(default=""))
 
     # 1. The same main search as /api/search, but limit 1: it only decides which threshold
     #    applies (run_with_fallback), so the counts agree with the records on the page.
-    body = {
-        "q": search_text(req.question, req.history),
-        "hybrid": {"embedder": "default", "semanticRatio": SEMANTIC_RATIO},
-        "limit": 1,
-        "attributesToRetrieve": ["id"],
-    }
+    #    No question (browsing): a placeholder search ("q": ""), like /api/browse. It simply
+    #    matches every record that passes the filters, so there's no meaning search and no
+    #    threshold, and the counts are those of the whole archive.
+    browsing = not req.question.strip()
+    if browsing:
+        body = {"q": "", "limit": 1, "attributesToRetrieve": ["id"]}
+    else:
+        body = {
+            "q": search_text(req.question, req.history),
+            "hybrid": {"embedder": "default", "semanticRatio": SEMANTIC_RATIO},
+            "limit": 1,
+            "attributesToRetrieve": ["id"],
+        }
     searches = [
         with_filter(body, req.filters),
         # 2. The counts: this field without its own filter, like in build_searches()
@@ -459,7 +467,7 @@ async def facet_options(req: FacetsRequest, x_api_key: str = Header(default=""))
     every_value = {"q": "", "limit": 0, "facets": [req.facet]}
     async with httpx.AsyncClient(timeout=10) as client:
         results, archive = await asyncio.gather(
-            run_with_fallback(client, searches),
+            meili_search(client, searches) if browsing else run_with_fallback(client, searches),
             meili_search(client, [every_value]),
         )
     counts = results[1].get("facetDistribution", {}).get(req.facet, {})

@@ -11,6 +11,7 @@
 		FACET_FIELDS,
 		MAX_HISTORY,
 		activeFacetCount,
+		type BrowseResponse,
 		type FacetField,
 		type Filters,
 		type HistoryTurn,
@@ -25,9 +26,6 @@
 	let newQuestion = $state(form?.question ?? '');
 
 	type Mode = 'new' | 'followup';
-
-	// The "Recent records" list under the search box. Hidden for now; true brings it back.
-	const SHOW_RECENTS = false;
 
 	// sessionStorage: survives a refresh, cleared when the tab closes, separate per tab
 	const STORAGE_KEY = 'search-thread';
@@ -284,31 +282,102 @@
 		refineStatus = null;
 	}
 
+	// ---- Browsing: filters before the first question ----
+	// Until there is an answer, the filter bar narrows the "Recent records" list instead. Those
+	// filters live here (browseFilters); the first question takes them along (hidden fields),
+	// and from then on they live on the thread like above. Same rhythm as a filter change on
+	// an answer: the pills change at once, the list FILTER_DELAY after the last change, and a
+	// newer change cancels the request still running.
+	let browseFilters = $state<Filters>({});
+	// The list after a filter change; null = still the one the page was loaded with (data.recent)
+	let browseResult = $state<BrowseResponse | null>(null);
+	let browseLoading = $state(false);
+	let browseError = $state('');
+	let browseStatus = $state(''); // read out by screen readers once the list has changed
+	let browseTimer: ReturnType<typeof setTimeout> | undefined;
+	let browseController: AbortController | null = null;
+	let lastGoodBrowseFilters: Filters = {};
+
+	const recent = $derived(
+		browseResult ? { ...browseResult, failed: false } : data.recent
+	);
+	const browseFiltered = $derived(activeFacetCount(browseFilters) > 0);
+
+	function applyBrowseFilters(filters: Filters) {
+		if (!browseLoading) lastGoodBrowseFilters = browseFilters; // first change of a burst
+		clearTimeout(browseTimer);
+		browseController?.abort();
+		browseFilters = filters;
+		browseError = '';
+		browseStatus = '';
+		browseLoading = true;
+		browseTimer = setTimeout(() => fetchBrowse(filters), FILTER_DELAY);
+	}
+
+	async function fetchBrowse(filters: Filters) {
+		const controller = new AbortController();
+		browseController = controller;
+		try {
+			const response = await fetch('/browse', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ filters }),
+				signal: controller.signal
+			});
+			if (!response.ok) throw new Error(`status ${response.status}`);
+			const result = (await response.json()) as BrowseResponse;
+			if (controller !== browseController) return; // a newer change took over
+			browseResult = result;
+			const n = activeFacetCount(filters);
+			browseStatus = n
+				? `${plural(result.total, 'record')} match ${plural(n, 'filter')}.`
+				: `${plural(result.total, 'record')} in the archive.`;
+		} catch {
+			if (controller.signal.aborted) return; // cancelled by a newer change
+			browseFilters = lastGoodBrowseFilters; // undo, the list didn't change
+			browseError = 'Could not apply the filter. Try again.';
+		} finally {
+			if (controller === browseController) browseLoading = false;
+		}
+	}
+
+	// ---- Changes from the filter bar: to the newest answer, or (no answer yet) to the list ----
+	const currentFilters = $derived(thread.length ? activeFilters : browseFilters);
+
+	function changeFilters(filters: Filters) {
+		if (thread.length) applyFilters(filters);
+		else applyBrowseFilters(filters);
+	}
+
 	function toggleFilter(field: FacetField, value: string) {
-		const current = activeFilters[field] ?? [];
+		const current = currentFilters[field] ?? [];
 		const values = current.includes(value)
 			? current.filter((v) => v !== value)
 			: [...current, value];
-		const next: Filters = { ...activeFilters, [field]: values };
+		const next: Filters = { ...currentFilters, [field]: values };
 		if (!values.length) delete next[field];
-		applyFilters(next);
+		changeFilters(next);
 	}
 
 	// A panel's "Clear": uncheck every value of one field, keep the others
 	function clearFacet(field: FacetField) {
-		const next: Filters = { ...activeFilters };
+		const next: Filters = { ...currentFilters };
 		delete next[field];
-		applyFilters(next);
+		changeFilters(next);
 	}
 
-	// What the filter panels count against (see PanelSearch), and the number for "Show N records"
-	const panelSearch = $derived<PanelSearch | null>(
+	// What the filter panels count against (see PanelSearch): the newest answer's search, or
+	// no question at all while browsing (search-api then counts the whole archive)
+	const panelSearch = $derived<PanelSearch>(
 		thread.length
 			? { question: thread[thread.length - 1].question, history: historyBefore(thread), filters: activeFilters }
-			: null
+			: { question: '', history: [], filters: browseFilters }
 	);
-	// Older saved threads have no total: then the number of records shown is the best we know
-	const latestTotal = $derived(thread.at(-1)?.total ?? thread.at(-1)?.results.length ?? 0);
+	// The number for "Show N records". Older saved threads have no total: then the number of
+	// records shown is the best we know.
+	const latestTotal = $derived(
+		thread.length ? (thread.at(-1)?.total ?? thread.at(-1)?.results.length ?? 0) : recent.total
+	);
 
 	// One submit handler for both forms; `mode` decides whether the answer replaces or extends the thread
 	// Scroll an element to the top of the screen (scroll-mt-6 on the target leaves a small gap)
@@ -359,7 +428,7 @@
 <!-- The active filters as hidden fields, so new questions and follow-ups use them too -->
 {#snippet filterInputs()}
 	{#each FACET_FIELDS as field (field)}
-		{#each activeFilters[field] ?? [] as value (value)}
+		{#each currentFilters[field] ?? [] as value (value)}
 			<input type="hidden" name={field} {value} />
 		{/each}
 	{/each}
@@ -367,16 +436,14 @@
 
 <!-- Inside of a filter panel (FilterBar shows it when a pill is clicked) -->
 {#snippet filterPanel(field: FacetField, close: () => void)}
-	{#if panelSearch}
-		<FacetPanel
-			{field}
-			search={panelSearch}
-			total={latestTotal}
-			onToggle={toggleFilter}
-			onClear={clearFacet}
-			{close}
-		/>
-	{/if}
+	<FacetPanel
+		{field}
+		search={panelSearch}
+		total={latestTotal}
+		onToggle={toggleFilter}
+		onClear={clearFacet}
+		{close}
+	/>
 {/snippet}
 
 {#snippet errors(mode: Mode)}
@@ -402,37 +469,59 @@
 			{@render errors('new')}
 		</form>
 
-		<!-- The filter bar, right under the search box. Its filters are the newest answer's: a
-		     change re-runs the newest question (also a follow-up further down), and new questions
-		     use them too. Only once there is an answer, and only with JavaScript (the thread
-		     needs it too). Outside the <form>, so its buttons and checkboxes never submit it. -->
-		{#if thread.length}
-			<FilterBar
-				filters={activeFilters}
-				disabled={!!pending}
-				onClearAll={() => applyFilters({})}
-				panel={filterPanel}
-			/>
-			{#if refineError}
-				<p class="text-sm font-medium text-red-500">{refineError}</p>
-			{/if}
+		<!-- The filter bar, right under the search box. Before the first question it narrows
+		     "Recent records"; once there is an answer, its filters are the newest answer's: a
+		     change re-runs the newest question (also a follow-up further down). New questions
+		     use the filters too. Outside the <form>, so its buttons and checkboxes never submit it. -->
+		<FilterBar
+			filters={currentFilters}
+			disabled={!!pending}
+			onClearAll={() => changeFilters({})}
+			panel={filterPanel}
+		/>
+		{#if refineError || browseError}
+			<p class="text-sm font-medium text-red-500">{refineError || browseError}</p>
 		{/if}
 	</header>
 
-	<!-- Browse list: open on a fresh visit; collapses on search, then it's a toggle.
-	     Hidden for now (SHOW_RECENTS). -->
-	{#if SHOW_RECENTS}
+	<!-- Browse list: the newest records (from search-api /api/browse, see +page.server.ts).
+	     Open on a fresh visit; collapses on search, then it's a toggle. -->
 	<details bind:open={recentsOpen} class="recents space-y-3">
 		<summary class="cursor-pointer text-sm font-medium text-muted-foreground select-none">
 			Recent records
+			{#if recent.total > recent.results.length}
+				<span class="font-normal">
+					· the newest {recent.results.length} of {recent.total}{browseFiltered ? ' matching' : ''}
+				</span>
+			{:else if browseFiltered && recent.total}
+				<span class="font-normal">· {recent.total} matching</span>
+			{/if}
 		</summary>
-		<div class="mt-3 space-y-3">
-			{#if data.defaultRecords.length}
+		<!-- Read out by screen readers once the list has changed after a filter change -->
+		<p role="status" class="sr-only">{browseStatus}</p>
+		<!-- While the list is being narrowed: dimmed, and marked busy for screen readers -->
+		<div
+			class="mt-3 space-y-3 transition-opacity {browseLoading ? 'opacity-60' : ''}"
+			aria-busy={browseLoading}
+		>
+			{#if recent.results.length}
 				<div class="grid grid-cols-1 gap-3 md:grid-cols-3">
-					{#each data.defaultRecords as record, i (record.id)}
-						<ResultsCard result={record} number={i + 1} anchorId={'default-' + i} />
+					{#each recent.results as record, i (record.id)}
+						<ResultsCard result={record} number={i + 1} anchorId={'recent-' + i} />
 					{/each}
 				</div>
+			{:else if recent.failed}
+				<p class="text-sm text-muted-foreground">
+					Could not load the recent records. Searching may still work; try reloading the page
+					later.
+				</p>
+			{:else if browseFiltered}
+				<p class="text-sm text-muted-foreground">
+					No records match these filters.
+					<button type="button" class="underline" onclick={() => changeFilters({})}>
+						Clear all filters
+					</button>
+				</p>
 			{:else}
 				<p class="text-sm text-muted-foreground">
 					No records in the archive yet. You can add one on the
@@ -441,7 +530,6 @@
 			{/if}
 		</div>
 	</details>
-	{/if}
 
 	<!-- The thread: question → summary → records, oldest first -->
 	{#each visibleTurns as turn, t (t)}

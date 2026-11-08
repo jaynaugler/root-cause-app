@@ -37,6 +37,14 @@ export interface SearchResponse {
 	facets?: Facets; // missing from older search-api versions
 }
 
+// The newest records without a question (POST /api/browse): the "Recent records" list
+export interface BrowseResponse {
+	results: SearchResult[]; // newest first
+	total: number; // records passing the filters (all records without filters)
+	facets?: Facets;
+}
+export const RECENT_LIMIT = 12; // records in the "Recent records" list
+
 // One question + its answer in the follow-up thread (what the action returns)
 export interface ThreadTurn extends SearchResponse {
 	question: string;
