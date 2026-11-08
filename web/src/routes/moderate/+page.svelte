@@ -1,0 +1,623 @@
+<script lang="ts">
+	import { onMount } from 'svelte';
+	import * as Card from '#lib/components/ui/card/index.js';
+	import { Button } from '#lib/components/ui/button/index.js';
+	import { Input } from '#lib/components/ui/input/index.js';
+	import { Label } from '#lib/components/ui/label/index.js';
+	import { Badge } from '#lib/components/ui/badge/index.js';
+	import FileTextIcon from '@lucide/svelte/icons/file-text';
+	import PaperclipIcon from '@lucide/svelte/icons/paperclip';
+	import EyeIcon from '@lucide/svelte/icons/eye';
+	import EyeOffIcon from '@lucide/svelte/icons/eye-off';
+	import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
+	import CheckIcon from '@lucide/svelte/icons/check';
+	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+	import UserIcon from '@lucide/svelte/icons/user';
+	import MailIcon from '@lucide/svelte/icons/mail';
+
+	type PendingSubmission = {
+		id: string;
+		name: string | null;
+		email: string | null;
+		description: string | null;
+		link: string | null;
+		sitelink: string | null;
+		attachmentName: string | null;
+		attachmentUrl: string | null;
+		status: string;
+		createdAt: string | null;
+	};
+
+	let loading = $state(true);
+	let error = $state<string | null>(null);
+	let queue = $state<PendingSubmission[]>([]);
+
+	// Previews toggled per submission ID
+	let previewOpen = $state<Record<string, boolean>>({});
+
+	// Editing states
+	let editingId = $state<string | null>(null);
+	let editName = $state('');
+	let editEmail = $state('');
+	let editLink = $state('');
+	let editSitelink = $state('');
+	let editDescription = $state('');
+	let editAttachmentName = $state('');
+	let editAttachmentUrl = $state('');
+
+	let actionLoading = $state<string | null>(null);
+
+	function getDocumentUrl(item: PendingSubmission): string | null {
+		if (item.attachmentUrl) return item.attachmentUrl;
+		if (item.link && (item.link.toLowerCase().endsWith('.pdf') || item.link.includes('/download/'))) {
+			return item.link;
+		}
+		return null;
+	}
+
+	function getDocumentName(item: PendingSubmission): string {
+		if (item.attachmentName) return item.attachmentName;
+		if (item.link) {
+			try {
+				const pathname = new URL(item.link).pathname;
+				const parts = pathname.split('/').filter(Boolean);
+				if (parts.length > 0 && parts[parts.length - 1].includes('.')) {
+					return decodeURIComponent(parts[parts.length - 1]);
+				}
+			} catch {
+				// Fall through
+			}
+		}
+		return 'Attached Document';
+	}
+
+	function isPdf(url: string | null): boolean {
+		if (!url) return false;
+		return url.toLowerCase().includes('.pdf');
+	}
+
+	function isImage(url: string | null): boolean {
+		if (!url) return false;
+		return /\.(png|jpe?g|webp|gif|svg)(\?.*)?$/i.test(url);
+	}
+
+	function togglePreview(id: string) {
+		previewOpen[id] = !previewOpen[id];
+	}
+
+	async function fetchQueue() {
+		loading = true;
+		error = null;
+		editingId = null;
+		try {
+			const res = await fetch('/api/moderate/pending');
+			if (!res.ok) {
+				error = `Failed to load moderation queue (${res.status}).`;
+			} else {
+				const body = await res.json();
+				queue = body.records ?? [];
+			}
+		} catch {
+			error = 'Could not connect to the moderation service.';
+		} finally {
+			loading = false;
+		}
+	}
+
+	function startEditing(item: PendingSubmission) {
+		editingId = item.id;
+		editName = item.name ?? '';
+		editEmail = item.email ?? '';
+		editLink = item.link ?? '';
+		editSitelink = item.sitelink ?? '';
+		editDescription = item.description ?? '';
+		editAttachmentName = item.attachmentName ?? '';
+		editAttachmentUrl = item.attachmentUrl ?? '';
+	}
+
+	function cancelEditing() {
+		editingId = null;
+	}
+
+	async function approveItem(id: string) {
+		actionLoading = id;
+		try {
+			const res = await fetch(`/api/moderate/approve/${id}`, { method: 'POST' });
+			if (!res.ok) {
+				const err = await res.json().catch(() => null);
+				alert(err?.detail ?? 'Failed to approve submission.');
+			} else {
+				queue = queue.filter((item) => item.id !== id);
+			}
+		} catch {
+			alert('Network failure while approving submission.');
+		} finally {
+			actionLoading = null;
+		}
+	}
+
+	async function saveModifications(id: string) {
+		if (!editLink.trim() && !editAttachmentUrl.trim() && !editAttachmentName.trim()) {
+			alert('Submission must have either a resource link or an attached document.');
+			return;
+		}
+
+		actionLoading = id;
+		try {
+			const payload = {
+				name: editName.trim() || null,
+				email: editEmail.trim() || null,
+				link: editLink.trim() || null,
+				sitelink: editSitelink.trim() || null,
+				description: editDescription.trim() || null,
+				attachment_name: editAttachmentName.trim() || null,
+				attachment_url: editAttachmentUrl.trim() || null
+			};
+
+			const res = await fetch(`/api/moderate/modify/${id}`, {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(payload)
+			});
+
+			if (!res.ok) {
+				const err = await res.json().catch(() => null);
+				alert(err?.detail ?? 'Failed to update submission details.');
+			} else {
+				queue = queue.map((item) => {
+					if (item.id === id) {
+						return {
+							...item,
+							name: payload.name,
+							email: payload.email,
+							link: payload.link,
+							sitelink: payload.sitelink,
+							description: payload.description,
+							attachmentName: payload.attachment_name,
+							attachmentUrl: payload.attachment_url
+						};
+					}
+					return item;
+				});
+				editingId = null;
+			}
+		} catch {
+			alert('Network exception updating submission.');
+		} finally {
+			actionLoading = null;
+		}
+	}
+
+	async function rejectItem(item: PendingSubmission) {
+		const label = item.attachmentName || item.name || 'this submission';
+		const confirmed = confirm(
+			`Are you sure you want to permanently reject and remove "${label}" from the submission queue?`
+		);
+		if (!confirmed) return;
+
+		actionLoading = item.id;
+		try {
+			const res = await fetch(`/api/moderate/reject/${item.id}`, { method: 'DELETE' });
+			if (!res.ok) {
+				const err = await res.json().catch(() => null);
+				alert(err?.detail ?? 'Server rejected deletion request.');
+			} else {
+				queue = queue.filter((i) => i.id !== item.id);
+			}
+		} catch {
+			alert('Network error while deleting submission.');
+		} finally {
+			actionLoading = null;
+		}
+	}
+
+	function formatDate(dateStr: string | null): string {
+		if (!dateStr) return '—';
+		try {
+			return new Date(dateStr).toLocaleDateString('en-CA', {
+				year: 'numeric',
+				month: 'short',
+				day: 'numeric'
+			});
+		} catch {
+			return dateStr;
+		}
+	}
+
+	onMount(() => {
+		fetchQueue();
+	});
+</script>
+
+<svelte:head>
+	<title>Submitted Requests · Our History Hub</title>
+</svelte:head>
+
+<main class="container mx-auto max-w-4xl px-4 py-12 space-y-6">
+	<Card.Root class="border-orange-200/80 shadow-md">
+		<Card.Header class="flex flex-row items-center justify-between border-b border-orange-100 pb-4">
+			<div class="space-y-1">
+				<Card.Title class="text-xl font-bold tracking-tight text-[#2A1A10]">
+					Submitted Requests (Moderation Queue)
+				</Card.Title>
+				<Card.Description class="text-xs text-muted-foreground">
+					Review raw user contributions (uploaded documents and links) before sending them to the processing pipeline.
+				</Card.Description>
+			</div>
+			<div class="flex items-center gap-2">
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					class="h-8 gap-1.5 text-xs border-orange-200 hover:bg-orange-50"
+					onclick={fetchQueue}
+					disabled={loading}
+				>
+					<RefreshCwIcon class="size-3.5 {loading ? 'animate-spin' : ''}" />
+					Refresh
+				</Button>
+				<Badge
+					variant="secondary"
+					class="font-semibold {queue.length > 0 ? 'bg-amber-100 text-amber-900 border-amber-300' : ''}"
+				>
+					{queue.length} Pending
+				</Badge>
+			</div>
+		</Card.Header>
+
+		<Card.Content class="space-y-5 pt-5">
+			{#if loading}
+				<div class="py-12 text-center text-sm text-muted-foreground animate-pulse space-y-2">
+					<p>Loading submission queue…</p>
+				</div>
+			{:else if error}
+				<div class="rounded-lg border border-red-200 bg-red-50 p-4 text-center text-sm font-medium text-red-700">
+					⚠️ {error}
+				</div>
+			{:else if queue.length === 0}
+				<div class="rounded-xl border border-dashed border-orange-200 bg-orange-50/30 py-14 text-center space-y-2">
+					<p class="text-base font-semibold text-[#2A1A10]">📥 Moderation inbox clear</p>
+					<p class="text-xs text-muted-foreground">No pending user submissions waiting for review right now.</p>
+					<Button
+						type="button"
+						size="sm"
+						variant="outline"
+						class="mt-3 text-xs border-orange-200"
+						onclick={fetchQueue}
+					>
+						Check Again
+					</Button>
+				</div>
+			{/if}
+
+			<div class="space-y-4">
+				{#each queue as item (item.id)}
+					{@const docUrl = getDocumentUrl(item)}
+					{@const docName = getDocumentName(item)}
+					{@const hasDoc = !!item.attachmentUrl || !!item.attachmentName || (!!item.link && isPdf(item.link))}
+
+					<article class="rounded-xl border border-orange-200/70 bg-card p-5 shadow-xs space-y-4 transition-all">
+						<!-- VIEW MODE -->
+						{#if editingId !== item.id}
+							<!-- Header: Submitter Name, Email, Date, Badges & Actions -->
+							<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+								<div class="space-y-1.5">
+									<div class="flex flex-wrap items-center gap-2">
+										<h3 class="text-base font-bold text-foreground inline-flex items-center gap-1.5">
+											<UserIcon class="size-4 text-orange-700" />
+											{item.name || 'Anonymous Contributor'}
+										</h3>
+										{#if item.email}
+											<Badge variant="outline" class="text-[11px] gap-1 font-normal border-orange-200 bg-orange-50/50">
+												<MailIcon class="size-3 text-muted-foreground" />
+												<a href={`mailto:${item.email}`} class="hover:underline">{item.email}</a>
+											</Badge>
+										{/if}
+										{#if hasDoc}
+											<Badge variant="secondary" class="font-mono text-[10px] tracking-wider uppercase bg-amber-100 text-amber-900 border-amber-300">
+												📎 Document Attached
+											</Badge>
+										{:else if item.link}
+											<Badge variant="secondary" class="font-mono text-[10px] tracking-wider uppercase">
+												🔗 Link Submission
+											</Badge>
+										{/if}
+									</div>
+
+									<p class="text-[11px] text-muted-foreground">
+										Submitted on {formatDate(item.createdAt)}
+									</p>
+								</div>
+
+								<!-- Action buttons -->
+								<div class="flex items-center gap-1.5 shrink-0 self-end sm:self-start">
+									<Button
+										type="button"
+										variant="outline"
+										size="sm"
+										class="h-8 text-xs gap-1 border-orange-200 hover:bg-orange-50"
+										disabled={actionLoading !== null}
+										onclick={() => startEditing(item)}
+									>
+										<PencilIcon class="size-3.5" />
+										Edit
+									</Button>
+									<Button
+										type="button"
+										variant="destructive"
+										size="sm"
+										class="h-8 text-xs gap-1"
+										disabled={actionLoading !== null}
+										onclick={() => rejectItem(item)}
+									>
+										<Trash2Icon class="size-3.5" />
+										Reject
+									</Button>
+									<Button
+										type="button"
+										size="sm"
+										class="h-8 text-xs gap-1 bg-emerald-600 hover:bg-emerald-700 text-white font-medium"
+										disabled={actionLoading !== null}
+										onclick={() => approveItem(item.id)}
+									>
+										<CheckIcon class="size-3.5" />
+										{actionLoading === item.id ? 'Running Pipeline…' : 'Approve & Process'}
+									</Button>
+								</div>
+							</div>
+
+							<!-- ATTACHED DOCUMENT PREVIEW SECTION -->
+							{#if hasDoc}
+								<div class="rounded-xl border border-orange-200/90 bg-orange-50/40 p-3.5 space-y-3">
+									<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+										<div class="flex items-center gap-2.5 min-w-0">
+											<div class="p-2 bg-orange-100 rounded-lg text-orange-800 shrink-0">
+												<FileTextIcon class="size-5" />
+											</div>
+											<div class="min-w-0">
+												<p class="text-xs font-bold text-[#2A1A10] truncate">
+													{docName}
+												</p>
+												<p class="text-[10px] uppercase font-mono text-muted-foreground">
+													{isPdf(docUrl) ? 'PDF Document' : 'Attached File'}
+												</p>
+											</div>
+										</div>
+
+										<!-- Document preview & open actions -->
+										<div class="flex items-center gap-1.5 shrink-0">
+											{#if docUrl}
+												<Button
+													type="button"
+													variant="outline"
+													size="sm"
+													class="h-7 text-xs gap-1 border-orange-200 bg-white hover:bg-orange-50"
+													onclick={() => togglePreview(item.id)}
+												>
+													{#if previewOpen[item.id]}
+														<EyeOffIcon class="size-3" />
+														Hide Viewer
+													{:else}
+														<EyeIcon class="size-3" />
+														Inline Preview
+													{/if}
+												</Button>
+												<Button
+													type="button"
+													variant="outline"
+													size="sm"
+													class="h-7 text-xs gap-1 border-orange-200 bg-white hover:bg-orange-50"
+													href={docUrl}
+													target="_blank"
+													rel="noopener noreferrer"
+												>
+													<ExternalLinkIcon class="size-3" />
+													Open File
+												</Button>
+											{/if}
+										</div>
+									</div>
+
+									<!-- Collapsible Inline Document Viewer -->
+									{#if previewOpen[item.id] && docUrl}
+										<div class="pt-2 border-t border-orange-200/60">
+											{#if isPdf(docUrl)}
+												<iframe
+													src={docUrl}
+													title="Document PDF Preview"
+													class="w-full h-96 rounded-lg border border-border bg-white shadow-inner"
+												></iframe>
+											{:else if isImage(docUrl)}
+												<div class="flex justify-center bg-muted/20 p-2 rounded-lg border">
+													<img src={docUrl} alt="Uploaded attachment" class="max-h-80 object-contain rounded" />
+												</div>
+											{:else}
+												<div class="p-4 text-center text-xs text-muted-foreground bg-muted/20 rounded-lg">
+													<span>Inline rendering not supported for this file type. Click "Open File" above.</span>
+												</div>
+											{/if}
+										</div>
+									{/if}
+								</div>
+							{/if}
+
+							<!-- SUBMITTER NOTES / DESCRIPTION -->
+							{#if item.description}
+								<div class="rounded-lg bg-muted/30 p-3 text-xs leading-relaxed border border-border/50">
+									<span class="font-bold text-muted-foreground uppercase text-[10px] block mb-1">
+										Submitter Notes & Description:
+									</span>
+									<p class="text-foreground whitespace-pre-wrap">{item.description}</p>
+								</div>
+							{/if}
+
+							<!-- WEB LINKS SECTION (IF PROVIDED) -->
+							<div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 border-t border-border/50 pt-3 text-xs">
+								{#if item.link}
+									<div class="space-y-0.5">
+										<span class="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">
+											Resource Web Link
+										</span>
+										<div class="truncate">
+											<a
+												href={item.link}
+												target="_blank"
+												rel="noopener noreferrer"
+												class="text-orange-700 hover:underline inline-flex items-center gap-1 font-medium max-w-full"
+											>
+												<span class="truncate">{item.link}</span>
+												<ExternalLinkIcon class="size-3 shrink-0" />
+											</a>
+										</div>
+									</div>
+								{/if}
+
+								{#if item.sitelink}
+									<div class="space-y-0.5">
+										<span class="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">
+											Host Site Link
+										</span>
+										<div class="truncate">
+											<a
+												href={item.sitelink}
+												target="_blank"
+												rel="noopener noreferrer"
+												class="text-orange-700 hover:underline inline-flex items-center gap-1 font-medium max-w-full"
+											>
+												<span class="truncate">{item.sitelink}</span>
+												<ExternalLinkIcon class="size-3 shrink-0" />
+											</a>
+										</div>
+									</div>
+								{/if}
+							</div>
+
+						<!-- EDITING MODE -->
+						{:else}
+							<div class="space-y-4 rounded-xl border border-orange-300 bg-orange-50/40 p-4">
+								<div class="flex items-center justify-between border-b border-orange-200 pb-2">
+									<h4 class="text-xs font-bold uppercase tracking-wider text-[#2A1A10]">
+										Curator Editor — Edit Raw Submission
+									</h4>
+									<span class="text-[11px] font-mono text-muted-foreground">ID: {item.id}</span>
+								</div>
+
+								<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+									<!-- Submitter Name -->
+									<div class="space-y-1">
+										<Label for={`name-${item.id}`} class="text-xs font-semibold">Submitter Name</Label>
+										<Input
+											id={`name-${item.id}`}
+											type="text"
+											class="bg-background text-xs"
+											bind:value={editName}
+											placeholder="e.g. Jane Doe"
+										/>
+									</div>
+
+									<!-- Submitter Email -->
+									<div class="space-y-1">
+										<Label for={`email-${item.id}`} class="text-xs font-semibold">Contact Email</Label>
+										<Input
+											id={`email-${item.id}`}
+											type="email"
+											class="bg-background text-xs"
+											bind:value={editEmail}
+											placeholder="name@example.com"
+										/>
+									</div>
+
+									<!-- Attached Document Name -->
+									<div class="space-y-1">
+										<Label for={`attname-${item.id}`} class="text-xs font-semibold">Attached File Name</Label>
+										<Input
+											id={`attname-${item.id}`}
+											type="text"
+											class="bg-background text-xs"
+											bind:value={editAttachmentName}
+											placeholder="e.g. document-1956.pdf"
+										/>
+									</div>
+
+									<!-- Attached Document URL/Path -->
+									<div class="space-y-1">
+										<Label for={`atturl-${item.id}`} class="text-xs font-semibold">Document URL / Path</Label>
+										<Input
+											id={`atturl-${item.id}`}
+											type="url"
+											class="bg-background text-xs"
+											bind:value={editAttachmentUrl}
+											placeholder="https://..."
+										/>
+									</div>
+
+									<!-- Resource Link -->
+									<div class="space-y-1">
+										<Label for={`link-${item.id}`} class="text-xs font-semibold">Resource Link (Optional if Document Attached)</Label>
+										<Input
+											id={`link-${item.id}`}
+											type="url"
+											class="bg-background text-xs"
+											bind:value={editLink}
+											placeholder="https://..."
+										/>
+									</div>
+
+									<!-- Site Link -->
+									<div class="space-y-1">
+										<Label for={`site-${item.id}`} class="text-xs font-semibold">Host Site Link</Label>
+										<Input
+											id={`site-${item.id}`}
+											type="url"
+											class="bg-background text-xs"
+											bind:value={editSitelink}
+											placeholder="https://..."
+										/>
+									</div>
+
+									<!-- Submitter Description -->
+									<div class="space-y-1 md:col-span-2">
+										<Label for={`desc-${item.id}`} class="text-xs font-semibold">
+											Submitter Notes / Description
+										</Label>
+										<textarea
+											id={`desc-${item.id}`}
+											rows={3}
+											class="flex w-full rounded-md border border-input bg-background p-2 text-xs shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+											bind:value={editDescription}
+											placeholder="User's explanation of what this record is..."
+										></textarea>
+									</div>
+								</div>
+
+								<div class="flex justify-end items-center gap-2 pt-3 border-t border-orange-200">
+									<Button
+										type="button"
+										size="sm"
+										variant="ghost"
+										class="text-xs"
+										onclick={cancelEditing}
+										disabled={actionLoading !== null}
+									>
+										Discard
+									</Button>
+									<Button
+										type="button"
+										size="sm"
+										class="text-xs bg-orange-700 hover:bg-orange-800 text-white"
+										disabled={actionLoading === item.id}
+										onclick={() => saveModifications(item.id)}
+									>
+										{actionLoading === item.id ? 'Saving…' : 'Apply Changes'}
+									</Button>
+								</div>
+							</div>
+						{/if}
+					</article>
+				{/each}
+			</div>
+		</Card.Content>
+	</Card.Root>
+</main>

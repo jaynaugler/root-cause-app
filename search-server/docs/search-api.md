@@ -105,13 +105,26 @@ We send one request to Meilisearch's `records` index:
 | ------------------------------- | ----------------- | ------------------------------------------------------------------- |
 | `hybrid.embedder`               | `"default"`       | The embedder created during [setup](setup.md#2-create-the-index-and-the-embedder) |
 | `hybrid.semanticRatio`          | `0.5`             | 0 = keywords only, 1 = meaning only. 0.5 mixes both equally         |
-| `rankingScoreThreshold`         | `0.6`             | Drop weak matches (score is 0–1), so the AI isn't fed unrelated records |
+| `rankingScoreThreshold`         | `0.7`, then `0.6` | Drop weak matches (score is 0–1), so the AI isn't fed unrelated records. See below |
 | `showRankingScore`              | `true`            | Each hit includes `_rankingScore`; useful for debugging and in the UI |
 | `limit`                         | from the request  | At most this many hits                                             |
 
 **Why hybrid?** Keyword search is good at exact things: names, places, "1916". Meaning search
 ("semantic") is good when the words differ: "cinema" vs "theatre", or English vs French. Hybrid
-combines both scores.
+combines both.
+
+**Why 0.7, with a second try at 0.6?** All records are about the same topic, so the meaning
+search gives almost *every* record about 0.6–0.68 for any question. At 0.6, "Who is Viola Desmond"
+returned 20 records. At 0.7 it returns only Viola (0.85). But questions that only match by meaning
+score lower: "ségrégation au cinéma" finds Viola at exactly 0.70. So when 0.7 finds **nothing**,
+we search once more with `FALLBACK_THRESHOLD` (0.6): better a few loose matches than "nothing
+found". Measured on 61 records (Nov 2026); re-check when the collection grows.
+
+`semanticRatio` turned out **not** to help here: 0.5, 0.3 and 0.2 gave the same scores. It changes
+how keyword and meaning results are mixed, not the score the threshold is compared with.
+
+The threshold stays **inside Meilisearch** on purpose: Meilisearch applies it to the facet counts
+too. Filtering hits in Python afterwards would make the counts disagree with the results.
 
 We use `MEILI_SEARCH_KEY`, a key that can **only search**. Even if search-api had a bug, it
 couldn't change the index.
@@ -177,7 +190,8 @@ Read from environment variables when the container starts. To change one, set it
 | `MEILI_URL`        | `http://meilisearch:7700`  | yes             | Where Meilisearch is                             |
 | `MEILI_SEARCH_KEY` | (required)                 | from `.env`     | Search-only Meilisearch key                      |
 | `SEMANTIC_RATIO`   | `0.5`                      | no              | Keyword vs meaning mix (0–1)                     |
-| `SCORE_THRESHOLD`  | `0.6`                      | no              | Minimum match score (0–1)                        |
+| `SCORE_THRESHOLD`  | `0.7`                      | yes (`0.7`)     | Minimum match score (0–1)                        |
+| `FALLBACK_THRESHOLD` | `0.6`                    | yes (`0.6`)     | Second try when nothing reaches `SCORE_THRESHOLD`. Same value = off |
 | `SUMMARY_PROVIDER` | `ollama`                   | yes (`ollama`)  | Default AI: `ollama` or `gemini`                 |
 | `SUMMARY_SOURCES`  | `5`                        | no              | How many top hits go into the prompt             |
 | `OLLAMA_URL`       | `http://ollama:11434`      | no              | Where Ollama is                                  |
