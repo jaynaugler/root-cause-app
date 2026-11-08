@@ -140,7 +140,6 @@
 	const FILTER_DELAY = 300; // ms
 	const SUMMARY_DELAY = 1000; // ms
 	const activeFilters = $derived<Filters>(thread.at(-1)?.filters ?? {});
-	const activeOffset = $derived(thread.at(-1)?.offset ?? 0);
 	let refining = $state(false); // a filter changed; its records haven't arrived yet
 	let summaryUpdating = $state(false); // the new summary is being written
 	let refineError = $state('');
@@ -237,6 +236,7 @@
 		summaryUpdating = false;
 		refineError = '';
 		refineStatus = null; // hidden until this change has arrived
+		moreStatus = '';
 		replaceLatest({ filters }); // the pill changes colour immediately
 		refining = true;
 		filterTimer = setTimeout(() => fetchRecords(id, filters), FILTER_DELAY);
@@ -262,32 +262,41 @@
 		}
 	}
 
-	// Previous / Next under the newest answer: other records, same summary. The summary is
-	// about the best records (page 1), and they don't change when you page, so it stays as it is
-	// (no new AI call per click). Its [1], [2] point at page 1's cards.
-	function changeSearchPage(page: number) {
+	// "Show 8 more" under the newest answer: the next records are ADDED below the ones on
+	// screen, the summary stays as it is (no new AI call). It is about the best records, and
+	// those stay on top, so its [1], [2] always find their cards.
+	let loadingMore = $state(false);
+	let moreStatus = $state(''); // read out by screen readers: "8 more records shown"
+
+	function showMoreResults() {
+		const latest = thread[thread.length - 1];
 		const id = cancelRefine(); // also stops a summary still waiting after a filter change…
 		refineError = '';
-		refining = true;
-		fetchPage(id, (page - 1) * SEARCH_LIMIT);
-		scrollToTop(`turn-${thread.length - 1}`);
+		moreStatus = '';
+		loadingMore = true;
+		fetchMore(id, (latest.offset ?? 0) + latest.results.length);
 	}
 
-	async function fetchPage(id: number, offset: number) {
+	async function fetchMore(id: number, offset: number) {
 		const answer = await askLatest(activeFilters, false, newSignal(), offset);
-		if (id !== refineId) return; // a newer change or a new search took over
-		refining = false;
+		loadingMore = false; // also when a newer change took over: that one replaces the records
+		if (id !== refineId) return;
 		if (answer) {
-			replaceLatest({ results: answer.results, total: answer.total, offset, facets: answer.facets });
+			const latest = thread[thread.length - 1];
+			// Skip a record that is already shown (the ranking can shift a little between calls)
+			const shown = new Set(latest.results.map((record) => record.id));
+			const added = answer.results.filter((record) => !shown.has(record.id));
+			replaceLatest({ results: [...latest.results, ...added], total: answer.total, facets: answer.facets });
+			moreStatus = `${plural(added.length, 'more record')} shown.`;
 		} else {
-			refineError = 'Could not load that page. Try again.'; // the old page stays
+			refineError = 'Could not load more records. Try again.';
 		}
 		// …so it is started again here
 		if (thread.at(-1)?.summaryStale) scheduleSummary(id);
 	}
 
-	// Step 2: rewrite the summary once the clicking has stopped. Always for page 1 (no offset):
-	// the summary is about the best records, whatever page is on screen.
+	// Step 2: rewrite the summary once the clicking has stopped. Always from the best records
+	// (offset 0), however many are shown.
 	function scheduleSummary(id: number) {
 		clearTimeout(summaryTimer);
 		summaryUpdating = true;
@@ -295,13 +304,15 @@
 			const answer = await askLatest(activeFilters, true, newSignal());
 			if (id !== refineId) return;
 			summaryUpdating = false;
-			// On page 1: take the whole answer, records and summary come from the same search, so
-			// [n] match. On another page: only the summary, the records on screen stay.
-			// If it failed, show "no summary" rather than one about other records.
+			const latest = thread[thread.length - 1];
+			// Only the first records shown: take the whole answer, records and summary come from
+			// the same search, so [n] match. More shown ("Show more"): only the summary, so the
+			// added records stay. If it failed, show "no summary" rather than one about other records.
+			const onlyFirst = !latest.offset && latest.results.length <= SEARCH_LIMIT;
 			replaceLatest(
 				!answer
 					? { summary: null, provider: null, summaryStale: false }
-					: activeOffset === 0
+					: onlyFirst
 						? { ...answer, offset: 0, summaryStale: false }
 						: { summary: answer.summary, provider: answer.provider, summaryStale: false }
 			);
@@ -316,6 +327,7 @@
 		summaryUpdating = false;
 		refineError = '';
 		refineStatus = null;
+		moreStatus = '';
 	}
 
 	// ---- Browsing: filters before the first question ----
@@ -655,16 +667,20 @@
 				class="group space-y-3 transition-opacity {isLatest && refining ? 'opacity-60' : ''}"
 			>
 				<summary class="cursor-pointer text-sm font-medium text-muted-foreground select-none">
-					<!-- More than one page: which slice is shown, e.g. "9–16 of 40 records" -->
+					<!-- Not all shown: "Showing 16 of 43 records". (offset: only in turns saved by
+					     the earlier page-by-page version, which started further down the list) -->
 					{#if found > turn.results.length && turn.results.length}
-						{offset + 1}–{offset + turn.results.length} of {plural(found, 'record')}
+						{#if offset}
+							{offset + 1}–{offset + turn.results.length} of {plural(found, 'record')}
+						{:else}
+							Showing {turn.results.length} of {plural(found, 'record')}
+						{/if}
 					{:else}
 						{plural(turn.results.length, 'record')} found
 					{/if}
 				</summary>
 				<div class="mt-3 grid grid-cols-1 gap-3">
-					<!-- Numbered across pages (page 2 starts at 9). The id uses the same number, so
-					     the summary's [1] only ever finds card 1, never another page's first card. -->
+					<!-- The id uses the card's number, so the summary's [1] finds card 1 -->
 					{#each turn.results as result, i (result.id)}
 						<ResultsCard
 							{result}
@@ -674,16 +690,22 @@
 						/>
 					{/each}
 				</div>
-				<!-- Under the cards; only the newest answer can change page (like the filters) -->
+				<!-- Under the cards; only the newest answer can grow (like the filters) -->
 				{#if isLatest}
-					<Pagination
-						page={Math.floor(offset / SEARCH_LIMIT) + 1}
-						total={found}
-						pageSize={SEARCH_LIMIT}
-						loading={refining}
-						label="Search result pages"
-						onPage={changeSearchPage}
-					/>
+					{@const left = found - offset - turn.results.length}
+					<p role="status" class="sr-only">{moreStatus}</p>
+					{#if left > 0}
+						<div class="flex justify-center pt-2">
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={loadingMore || refining}
+								onclick={showMoreResults}
+							>
+								{loadingMore ? 'Loading…' : `Show ${Math.min(SEARCH_LIMIT, left)} more`}
+							</Button>
+						</div>
+					{/if}
 				{/if}
 			</details>
 		</article>
