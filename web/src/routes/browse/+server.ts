@@ -25,6 +25,7 @@ export const POST: RequestHandler = async ({ request, fetch }) => {
 			fetch,
 			parsed.data.filters,
 			RECENT_LIMIT,
+			parsed.data.offset,
 			AbortSignal.any([request.signal, AbortSignal.timeout(10_000)])
 		);
 		return json({ results, total });
