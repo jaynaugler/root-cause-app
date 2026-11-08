@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { z } from 'zod';
 import { getResourceModel } from '#lib/server/resources.js';
+import { requireUserApi } from '#lib/server/guards.js';
 import { RESOURCE_CATEGORIES } from '#lib/server/resource-schema.js';
 import { MAX_DESCRIPTION_LENGTH, MIN_SUMMARY_LENGTH } from '#lib/server/resource-schema.js';
 
@@ -39,7 +40,11 @@ function normalizeTexts(description: string | null, summary: string | null) {
 	return { description, summary };
 }
 
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async (event) => {
+	// First line, before reading anything: not logged in → 401, nothing below runs.
+	requireUserApi(event);
+	const { request } = event;
+
 	const parse = insertSchema.safeParse(await request.json().catch(() => null));
 	if (!parse.success) {
 		return json({ error: 'Invalid resource record.', issues: parse.error.issues }, { status: 400 });
