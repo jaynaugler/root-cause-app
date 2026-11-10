@@ -18,6 +18,7 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError, PyPdfError
 
 from app.ai import clean_record
+from app.egress import zenrows_enabled, zenrows_get
 
 router = APIRouter(tags=["pdf"])
 logger = logging.getLogger("uvicorn.error")
@@ -194,8 +195,38 @@ async def pdf_metadata(payload: PdfUrlIn) -> dict:
 		return await _run_pdf_metadata(payload)
 
 
-async def _run_pdf_metadata(payload: PdfUrlIn) -> dict:
-	# Download (streaming so the 10 MB cap holds even without a content-length)
+async def _zenrows_download(url: str) -> bytes | None:
+	"""PDF bytes through the ZenRows relay as a single buffered response.
+
+	Returns None when the relay path is unusable (no key configured, relay
+	failure or timeout, over the 10 MB cap, body not a PDF) so the caller can
+	stream directly — a relay failure must not change what the endpoint answers,
+	only which route the bytes took. A genuinely oversized relayed PDF still
+	raises the cap error here: retrying it directly would just download it twice.
+	"""
+	if not zenrows_enabled():
+		return None
+	try:
+		async with httpx.AsyncClient(
+			follow_redirects=True, timeout=DOWNLOAD_TIMEOUT
+		) as client:
+			resp = await zenrows_get(client, url, headers={"user-agent": USER_AGENT})
+		if resp is None:
+			return None
+		if resp.status_code != 200:
+			logger.warning("ZenRows relay failed for %s (HTTP %d) — streaming directly", url, resp.status_code)
+			return None
+		if len(resp.content) > MAX_BYTES:
+			raise HTTPException(HTTPStatus.CONTENT_TOO_LARGE, "PDF exceeds the 10 MB limit.")
+		if not resp.content.startswith(b"%PDF-"):
+			return None  # HTML block/error page or non-PDF body — let direct try
+		return resp.content
+	except (httpx.TimeoutException, httpx.HTTPError):
+		logger.warning("ZenRows relay unreachable for %s — streaming directly", url)
+		return None
+
+
+async def _download_direct(payload: PdfUrlIn) -> bytes:
 	chunks: list[bytes] = []
 	size = 0
 	try:
@@ -218,7 +249,17 @@ async def _run_pdf_metadata(payload: PdfUrlIn) -> dict:
 		raise HTTPException(HTTPStatus.GATEWAY_TIMEOUT, "Timed out downloading the PDF.")
 	except httpx.HTTPError:
 		raise HTTPException(HTTPStatus.BAD_GATEWAY, "Could not download a file from that URL.")
-	data = b"".join(chunks)
+	return b"".join(chunks)
+
+
+async def _run_pdf_metadata(payload: PdfUrlIn) -> dict:
+	# Relay first (Render's IP is blocked by several hosts): ZenRows returns the
+	# body in one response, so its 10 MB cap is enforced after the fact. Anything
+	# unusable there — no key, relay failure, oversized, non-PDF — falls through
+	# to the direct streaming download, which enforces the cap during transfer.
+	data = await _zenrows_download(str(payload.url))
+	if data is None:
+		data = await _download_direct(payload)
 
 	# Sanity check: many hosts serve PDFs as application/octet-stream, so the
 	# magic bytes are a more reliable gate than the content-type header.

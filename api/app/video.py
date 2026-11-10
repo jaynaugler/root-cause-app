@@ -6,7 +6,7 @@ import logging
 import os
 import re
 from http import HTTPStatus
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -39,10 +39,37 @@ PROXY_USERNAME = os.environ.get("YT_PROXY_USERNAME")
 PROXY_PASSWORD = os.environ.get("YT_PROXY_PASSWORD")
 
 
+class _WebshareRotatingProxyConfig(WebshareProxyConfig):
+	"""WebshareProxyConfig, but with URL-safe credentials.
+
+	Its url builder interpolates the username and password raw, so a password
+	containing a URL-special character ('#', '@', '?', …) cuts the proxy URL
+	short and every fetch dies at parse time — Webshare passwords routinely
+	contain such characters, which is why the proxy can appear "never wired up".
+	Percent-encoding them fixes that without changing the rotating-residential
+	behaviour the library expects (retries rotate to a new IP, keep-alive off)."""
+
+	@property
+	def url(self) -> str:
+		username = self.proxy_username
+		if username.endswith("-rotate"):
+			username = username[: -len("-rotate")]
+		return (
+			f"http://{quote(username, safe='')}-rotate:{quote(self.proxy_password, safe='')}"
+			f"@{self.domain_name}:{self.proxy_port}/"
+		)
+
+
 def _transcript_api() -> YouTubeTranscriptApi:
-	"""The transcript client, through the Webshare proxy when it is configured."""
+	"""The transcript client, through the Webshare proxy when it is configured.
+
+	Logs which path every transcript fetch takes — when YouTube keeps refusing,
+	the first thing to check in these logs is whether fetches went through the
+	proxy at all (api/scripts/check_yt_proxy.py reproduces the chain locally)."""
 	if PROXY_USERNAME and PROXY_PASSWORD:
-		return YouTubeTranscriptApi(WebshareProxyConfig(PROXY_USERNAME, PROXY_PASSWORD))
+		logger.info("transcript fetch: using the Webshare proxy configured in YT_PROXY_*")
+		return YouTubeTranscriptApi(_WebshareRotatingProxyConfig(PROXY_USERNAME, PROXY_PASSWORD))
+	logger.info("transcript fetch: NO proxy configured — using the server IP directly")
 	return YouTubeTranscriptApi()
 
 OEMBED_TIMEOUT = 10.0

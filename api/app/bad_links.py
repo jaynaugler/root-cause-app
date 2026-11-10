@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from pymongo.errors import PyMongoError
 
 from app.db import db
+from app.egress import egress_get
 
 router = APIRouter(tags=["bad-links"])
 
@@ -46,9 +47,12 @@ async def is_link_broken(client: httpx.AsyncClient, url: str | None) -> bool:
 
     async with _CHECK_SEMAPHORE:
         try:
+            # HEAD stays direct: ZenRows serves GETs only, and a direct HEAD is
+            # the cheapest reachability probe. Sites that reject HEAD, and hosts
+            # that 403 a datacenter IP, get re-checked through ZenRows.
             response = await client.head(url, timeout=10.0, follow_redirects=True)
             if response.is_error or response.status_code in (404, 405, 501):
-                response = await client.get(url, timeout=10.0, follow_redirects=True)
+                response = await egress_get(client, url, timeout=10.0)
             return response.is_error
         except (TimeoutError, httpx.HTTPError):
             return True

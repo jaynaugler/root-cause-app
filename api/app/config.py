@@ -27,6 +27,12 @@ class Settings(BaseSettings):
 	mongodb_db: str = ""
 	allowed_origins: str = ""  # comma-separated origins allowed to call the API directly (browser CORS)
 
+	# ZenRows (api/app/egress.py) relays the API's outbound scraping (feeds,
+	# Gutenberg, PDF hosts, link checks) through an unblocked IP pool — Render's
+	# datacenter IP gets blocked. Unset = direct requests; keep it unset in the
+	# local .env so dev runs spend no credits, set it in Render's environment.
+	zenrows_api_key: str = ""
+
 	# Google AI Studio (api/app/ai.py cleans fetched PDF records). No key set
 	# means the PDF flow returns raw records instead of cleaned ones.
 	gemini_api_key: str = ""

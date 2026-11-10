@@ -12,6 +12,7 @@ from pydantic import BaseModel, HttpUrl
 
 from app.ai import MIN_SUMMARY_CHARS, _description, clean_record
 from app.db import db
+from app.egress import egress_get
 
 logger = logging.getLogger("uvicorn.error")
 router = APIRouter(tags=["feeds"])
@@ -139,7 +140,9 @@ async def check_feeds() -> dict:
 	async with httpx.AsyncClient(timeout=FEED_TIMEOUT, follow_redirects=True) as client:
 		for source in feeds:
 			try:
-				resp = await client.get(source["url"], headers={"user-agent": USER_AGENT})
+				# Relayed through ZenRows when configured — feed hosts reject
+				# Render's datacenter IP; falls back to direct without a key.
+				resp = await egress_get(client, source["url"], headers={"user-agent": USER_AGENT})
 				resp.raise_for_status()
 			except httpx.HTTPError as exc:
 				result["failed"].append({"feed": source["url"], "error": str(exc)[:200]})

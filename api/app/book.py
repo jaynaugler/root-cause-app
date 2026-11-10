@@ -14,6 +14,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 
 from app.ai import clean_record
+from app.egress import egress_get, zenrows_get
 from app.pdf import _REQUEST_SLOTS, MAX_SUMMARY_CHARS, PdfUrlIn, _ser
 
 logger = logging.getLogger("uvicorn.error")
@@ -82,7 +83,7 @@ async def _gutendex(id: str) -> dict | None:
 		async with httpx.AsyncClient(
 			timeout=GUTENDEX_TIMEOUT, follow_redirects=True
 		) as client:
-			resp = await client.get(url, headers={"user-agent": USER_AGENT})
+			resp = await egress_get(client, url, headers={"user-agent": USER_AGENT})
 	except (httpx.TimeoutException, httpx.HTTPError):
 		return None
 	if resp.status_code != 200:
@@ -102,7 +103,7 @@ async def _scrape_page(id: str) -> dict | None:
 		async with httpx.AsyncClient(
 			timeout=GUTENDEX_TIMEOUT, follow_redirects=True
 		) as client:
-			resp = await client.get(f"https://www.gutenberg.org/ebooks/{id}", headers={"user-agent": USER_AGENT})
+			resp = await egress_get(client, f"https://www.gutenberg.org/ebooks/{id}", headers={"user-agent": USER_AGENT})
 	except (httpx.TimeoutException, httpx.HTTPError):
 		return None
 	if resp.status_code != 200:
@@ -184,11 +185,41 @@ def _text_excerpts(text: str) -> str:
 	return "\n\n".join(excerpts)
 
 
+async def _zenrows_text(client: httpx.AsyncClient, text_url: str) -> str | None:
+	"""A book's plain text through the ZenRows relay — Render's IP is blocked by
+	hosting sites. Returns None (caller downloads directly) when the key is not
+	configured, the relay fails, the body is over the size cap, or it looks like
+	an HTML error page rather than a book file."""
+	try:
+		resp = await zenrows_get(client, text_url, headers={"user-agent": USER_AGENT})
+	except (httpx.TimeoutException, httpx.HTTPError):
+		return None
+	if resp is None or resp.status_code != 200:
+		return None
+	if len(resp.content) > MAX_BOOK_BYTES:
+		logger.warning("relayed book text exceeds %d bytes: %s", MAX_BOOK_BYTES, text_url)
+		return None
+	body = resp.content.decode("utf-8-sig", "replace")
+	if re.match(r"\s*<(?:!doctype|html)\b", body, re.IGNORECASE):
+		return None
+	return body
+
+
 async def _book_text(candidates: list[str]) -> str:
-	"""Download and clean a book's plain text; reject HTML error pages."""
+	"""Download and clean a book's plain text; reject HTML error pages.
+
+	Each candidate first runs through the ZenRows relay when configured; the
+	direct streaming download below still applies its size cap during the
+	transfer and covers the unconfigured-key and failed-relay cases."""
 	try:
 		async with httpx.AsyncClient(timeout=TEXT_TIMEOUT, follow_redirects=True) as client:
 			for text_url in candidates:
+				if (relayed := await _zenrows_text(client, text_url)) is not None and (
+					text := _clean_book_text(relayed)
+				):
+					return text
+				# A relayed body that cleaned to nothing (or no configured relay)
+				# falls through to the direct download for the same candidate.
 				try:
 					async with client.stream(
 						"GET", text_url, headers={"user-agent": USER_AGENT}
